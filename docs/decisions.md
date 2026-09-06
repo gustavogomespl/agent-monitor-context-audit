@@ -1,5 +1,15 @@
 # Protocol and implementation decisions
 
+## 2026-09-06: branch-based Colab setup
+
+The author requested selecting the source branch directly in the notebook.
+`BRANCH="pilot"` now selects this repository by default; the first setup resolves
+and saves an exact commit. Reconnects retain that commit and reviewed frozen
+snapshots take precedence, so a later branch update cannot silently change an
+experiment. An explicit SHA and the source ZIP remain optional alternatives.
+Codex implemented this setup change and checked it using independent synthetic
+Git repositories; no experimental scores informed the change.
+
 ## 2026-09-06: author-requested Qwen/Colab infrastructure revision
 
 The author explicitly requested adapting the experiment to Qwen and creating a

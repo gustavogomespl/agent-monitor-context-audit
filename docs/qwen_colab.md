@@ -1,16 +1,18 @@
 # Qwen3.8-27B on Colab
 
 Open `notebooks/03_qwen_colab.ipynb` through Colab's **File → Upload notebook**.
-The companion `dist/qwen-colab-bundle.zip` transfers the current public source and
-Git provenance without publishing this checkout. Default Run All performs no
+The default source is this GitHub repository's `pilot` branch. Set `BRANCH` to
+another published branch when needed; `CODE_REF` optionally selects an exact
+40-character commit. Default Run All performs no
 installation, download, Drive mounting, data acquisition or model generation.
 
 ## Running the notebook
 
-1. In a preparation runtime, set `RUN_SETUP=True`. Upload the companion bundle
-   when prompted and allow Drive mounting. Alternatively provide a repository URL
-   and exact commit that already contains this implementation. Setup preserves a
-   durable model SHA and inference package versions; it never starts a model.
+1. In a preparation runtime, set `BRANCH="pilot"`, `RUN_SETUP=True` and allow Drive
+   mounting. Setup clones `https://github.com/gustavogomespl/agent-monitor-context-audit.git`,
+   fetches the selected branch, checks out its exact commit and saves it in
+   `configuration/code-pin.json` on Drive. It also installs dependencies and saves
+   the model/runtime pins; it never starts a model. No ZIP is required.
 2. Set `RUN_ACQUIRE=True` once. The official pinned benchmark is acquired and
    inventoried privately. Existing records retain their opaque IDs and split on
    reconnect. Review the family grouping and fixed rubric before generation.
@@ -34,6 +36,21 @@ The notebook normally disconnects the Colab runtime after durable export.
 Installation and GPU allocation while reading/editing the notebook are outside
 the managed execution cap. A supplied dollar rate is an estimate, not a Colab
 invoice. GPU availability and platform session limits remain controlled by Colab.
+
+## Source versions and reconnects
+
+`BRANCH` selects the published source on the first setup. Later sessions retain
+the saved commit even if the remote branch advances; they do not pull new code
+into an existing experiment. Setup prints the selected commit and Python version.
+Changing the source selection requires a new `DRIVE_ROOT` and fresh `/content`
+runtime so existing records retain their provenance. A reviewed local freeze
+takes precedence and is restored from its durable source snapshot.
+
+For an unpublished working tree, set `PROJECT_ZIP` to the uploaded companion
+`dist/qwen-colab-bundle.zip`. Alternatively clear `REPO_URL` to use the upload
+picker. An existing saved ZIP workspace continues using that source. The ZIP is
+optional; the default Git workflow needs only the uploaded notebook and access
+to the selected repository branch.
 
 ## Inference contract
 

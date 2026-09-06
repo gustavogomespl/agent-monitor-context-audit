@@ -16,8 +16,10 @@ current empirical status is in [findings](reports/findings.md).
 
 The Qwen workflow is in [03_qwen_colab.ipynb](notebooks/03_qwen_colab.ipynb), with
 [setup, cost and recovery instructions](docs/qwen_colab.md). Upload the notebook
-to Colab and use the companion `dist/qwen-colab-bundle.zip` to transfer the current
-source without a public push. It uses one pinned `Qwen/Qwen3.8-27B` in BF16 for
+to Colab, select `BRANCH` (default `pilot`) and enable `RUN_SETUP`. Setup clones
+this repository and saves the branch's exact commit for subsequent sessions.
+The companion `dist/qwen-colab-bundle.zip` remains an optional source transfer.
+It uses one pinned `Qwen/Qwen3.8-27B` in BF16 for
 both roles, exact tokenizer counts, thinking disabled and persistent private
 Drive storage. Each phase requires explicit opt-in, a positive GPU rate/cap and
 data-use/rubric confirmation. Default Run All is inert. Actual H100 and model
