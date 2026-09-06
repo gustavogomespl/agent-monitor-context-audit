@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "data_origin": "sleight_bench",
+  "dataset_commit": "218c58315cc01ff0dc5a100e906c27d82d259521",
+  "source_repository": "https://github.com/safety-research/sleight-bench.git",
+  "normalized_content_digest": "9526d60af27a54488c004987c195f1b3959cc348c0787793997eea1ec5c732b1",
+  "source_license": "MIT",
+  "split_seed": 20260905,
+  "counts": {
+    "source_directories": 44,
+    "source_categories": 12,
+    "attack_transcript_files": 44,
+    "benign_transcript_files": 43,
+    "all_jsonl_files": 88,
+    "excluded_multisession_directories": 6,
+    "excluded_multisession_cases": 3,
+    "excluded_unpaired_directories": 1,
+    "excluded_malformed_directories": 2,
+    "eligible_pairs": 35,
+    "eligible_transcripts": 70,
+    "eligible_families": 33,
+    "related_multiple_pair_families": 2,
+    "development_pairs": 8,
+    "test_pairs": 27,
+    "requested_development_pairs": 8
+  },
+  "exclusions": [
+    {
+      "scenario_id": "s_4169a50de5afe95e4d6d117e",
+      "reason": "multisession_or_related",
+      "source_transcript_count": 2
+    },
+    {
+      "scenario_id": "s_7d95f52c506e933edee61183",
+      "reason": "multisession_or_related",
+      "source_transcript_count": 2
+    },
+    {
+      "scenario_id": "s_692a24273fbc0ec82f5b8eb5",
+      "reason": "multisession_or_related",
+      "source_transcript_count": 2
+    },
+    {
+      "scenario_id": "s_7817eed0ef24716ca82f6134",
+      "reason": "multisession_or_related",
+      "source_transcript_count": 2
+    },
+    {
+      "scenario_id": "s_f62df7b8f3b61e63a640070c",
+      "reason": "multisession_or_related",
+      "source_transcript_count": 2
+    },
+    {
+      "scenario_id": "s_7060dce70325f469da54be17",
+      "reason": "multisession_or_related",
+      "source_transcript_count": 2
+    },
+    {
+      "scenario_id": "s_e3cdc36007da3a51326f5436",
+      "reason": "invalid_official_format",
+      "source_transcript_count": 2
+    },
+    {
+      "scenario_id": "s_6dbded7b443bd7f525de0668",
+      "reason": "invalid_official_format",
+      "source_transcript_count": 2
+    },
+    {
+      "scenario_id": "s_97edee8683773ee1159b28f4",
+      "reason": "missing_paired_transcript",
+      "source_transcript_count": 1
+    }
+  ],
+  "family_rule": "Transitive stage stems, exact normalized tasks/scenarios, sidecar references",
+  "model_input_view": "Visible text and tool interactions; thinking and canaries excluded",
+  "initial_task_rule": "First real user text, preserved literally outside body",
+  "body_size": {
+    "unit": "utf8_bytes",
+    "min": 2135,
+    "median": 14010,
+    "max": 370352
+  },
+  "model_token_counts": null,
+  "context_window_validation": "Pending explicit model selection and provider token counting",
+  "performance_scores_generated": false
+}

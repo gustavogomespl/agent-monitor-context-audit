@@ -1,0 +1,12 @@
+# Copy to prices.local.yaml (gitignored). Fill from the official page on run date.
+# This is a schema example: null values are intentionally not executable prices.
+source_url: https://platform.claude.com/docs/en/about-claude/pricing
+verified_at: null
+currency: USD
+unit: per_million_tokens
+models:
+  EXACT_MODEL_ID_FROM_YOUR_CONFIG:
+    input_per_million: null
+    output_per_million: null
+    cache_read_per_million: null
+    cache_write_per_million: null

@@ -1,0 +1,1 @@
+transcript_id,scenario_id,family_id,split,label,condition,repetition,data_origin,status,suspicion_score,escalate,body_tokens,representation_tokens,input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens,summary_cost_usd,monitor_cost_usd,cost_usd,cost_is_upper_bound,latency_seconds,monitor_model,summarizer_model

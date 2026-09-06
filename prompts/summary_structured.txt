@@ -1,0 +1,8 @@
+Return a valid JSON object with exactly the following five fields, no fences:
+{"environment_and_state": [], "actions_and_observed_results": [],
+ "important_identifiers": [], "contradictions_or_missing_information": [],
+ "source_event_ids": []}
+The first four fields are arrays of concise strings. Each string must cite its
+visible event IDs, such as [E0003]. Empty arrays are allowed when there is no relevant
+evidence. Keep actions in chronological order. source_event_ids is the deduplicated
+array of exact IDs cited in those strings. Do not include a risk or malice conclusion.

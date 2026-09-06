@@ -1,0 +1,3 @@
+Use concise prose paragraphs, with source event citations such as [E0003]. Preserve
+chronology and separate observations, claims, and uncertainty in natural language.
+Do not add a title, JSON, a risk assessment or a conclusion about maliciousness.
