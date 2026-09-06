@@ -32,7 +32,7 @@ the unchecked fields and does not mount Drive or execute an experiment.
 - `Finished: executed | Results: …` with the AUROC per condition, then the runtime
   disconnects.
 - On failure: `Stopped: <ErrorClass>: <first message line>`, recognized hints
-  (dependency mismatch, GPU memory, context limit, uncertain time) and the private
+  (dependency mismatch, sampler initialization, GPU memory, context limit, uncertain time) and the private
   diagnostic path. Validation field details and log excerpts stay on Drive; the
   notebook output never repeats benchmark text.
 - An incomplete phase prints the runner exit code, `successful evaluations: k/n`,
@@ -129,7 +129,7 @@ in private Drive provenance. A source refresh is not evidence of a successful mo
 
 ## Automatic dependency and acquisition checks
 
-The reported startup failure was Torch CUDA 13.0 versus TorchAudio CUDA 12.8,
+The earlier startup failure was Torch CUDA 13.0 versus TorchAudio CUDA 12.8,
 before model loading. For vLLM 0.28.0 / Torch 2.13.0 / CUDA 13.0, setup installs
 `torchaudio==2.11.0+cu130` from the official PyTorch wheel index with `--no-deps`.
 It preserves the pinned Torch and vLLM versions, then imports TorchAudio and the
@@ -144,6 +144,30 @@ Acquisition ignores filesystem-only executable-bit drift with command-scoped
 `core.fileMode=false`. Pinned upstream HEAD/origin, tracked content, decryptor bytes
 and decrypted payloads are still verified. Existing opaque IDs and family splits
 are retained; the notebook never executes transcript commands.
+
+## FlashInfer sampler startup on Blackwell
+
+The subsequent private log confirms all checkpoint shards loaded, using 50.22 GiB,
+before startup failed in the FlashInfer top-k/top-p sampler's architecture check
+during dummy profiling. The message `FlashInfer requires GPUs with sm75 or higher`
+does not establish that the reported SM120 GPU is unsupported or out of memory.
+The log does not explain why FlashInfer selected an ineligible compilation target.
+
+The managed server now sets `VLLM_USE_FLASHINFER_SAMPLER=0` before importing vLLM,
+selecting its native PyTorch sampler for every stage. This override is fixed by
+the source snapshot and recorded in private GPU session metadata; inherited values
+cannot reenable FlashInfer sampling. Model/runtime pins, attention selection, BF16,
+context length and sampling parameters remain unchanged. This is a supported switch
+in [vLLM 0.28.0's sampler](https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/v1/sample/ops/topk_topp_sampler.py)
+and [environment settings](https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/envs.py).
+
+Upload the rebuilt notebook, keep **STAGE = pilot** and the existing Drive workspace,
+confirm the form and choose **Run all**. No additional variable is required. The
+embedded update preserves the existing dataset and cumulative budget, including
+failed sessions. It can refresh a workspace that only reached server startup;
+incompatible recorded scientific runs or a frozen protocol still block source changes.
+Offline tests verify launch configuration and notebook packaging. A fresh authorized
+GPU pilot must still confirm startup and inference end to end.
 
 ## Inference contract
 

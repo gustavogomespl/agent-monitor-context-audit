@@ -848,6 +848,10 @@ def failure_hints(details):
                 hints.append(line[:300])
     if "compiled with different CUDA versions" in details:
         hints.append("Dependency diagnosis: Torch and TorchAudio CUDA builds still differ.")
+    if ("FlashInfer requires GPUs with sm75 or higher" in details
+            and "topk_topp_sampler" in details):
+        hints.append("FlashInfer sampler failed its architecture check during startup. "
+                     "Use the updated Qwen notebook, which selects the native PyTorch sampler.")
     if "out of memory" in details.lower():
         hints.append("GPU memory was insufficient. Review the pilot settings before retrying.")
     if "exceed context" in details:
@@ -979,7 +983,8 @@ def run_guided():
                     # Leave bounded time for reports and notebook teardown.
                     if available <= 180:
                         raise ValueError("Insufficient GPU time for a run and its report.")
-                    print("  Starting the local vLLM server. The first session downloads about "
+                    print("  Starting the local vLLM server with the native PyTorch sampler. "
+                          "The first session downloads about "
                           "55 GB of weights before scoring; progress prints every 30 seconds.",
                           flush=True)
                     summary = execute_phase(config, available - 150)

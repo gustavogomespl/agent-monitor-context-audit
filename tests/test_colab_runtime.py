@@ -151,6 +151,7 @@ def simulated_lifecycle(tmp_path, monkeypatch):
             name, pid = "watchdog", 1001
         elif "vllm.entrypoints.openai.api_server" in command:
             name, pid = "server", 1002
+            state.server_environment = dict(kwargs["env"])
         elif "context_audit.cli" in command:
             name, pid = "worker", 1003
             assert kwargs["env"]["CONTEXT_AUDIT_GPU_SESSION"] == "synthetic_session"
@@ -195,6 +196,28 @@ def simulated_lifecycle(tmp_path, monkeypatch):
     yield colab, config, store, state
     for fd in state.barrier_read_fds:
         os.close(fd)
+
+
+@pytest.mark.parametrize("inherited", [None, "1"])
+def test_managed_server_pins_native_sampler_before_import_and_records_only_overrides(
+    simulated_lifecycle, monkeypatch, inherited
+):
+    colab, config, store, state = simulated_lifecycle
+    if inherited is None:
+        monkeypatch.delenv("VLLM_USE_FLASHINFER_SAMPLER", raising=False)
+    else:
+        monkeypatch.setenv("VLLM_USE_FLASHINFER_SAMPLER", inherited)
+    monkeypatch.setenv("SYNTHETIC_PRIVATE_TOKEN", "independent-do-not-record-fixture")
+    colab._run_managed(config, 1, 60, 30, {"name": "synthetic SM120", "compute": [12, 0]})
+    assert state.server_environment["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert os.environ.get("VLLM_USE_FLASHINFER_SAMPLER") == inherited
+    session = store.get("sessions", "synthetic_session")
+    assert session["engine_environment"] == {
+        "VLLM_USE_FLASHINFER_SAMPLER": "0",
+        "VLLM_NO_USAGE_STATS": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+    }
+    assert "independent-do-not-record-fixture" not in json.dumps(session)
 
 
 def test_startup_failure_settles_only_after_confirmed_shutdown(simulated_lifecycle):

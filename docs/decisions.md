@@ -279,3 +279,31 @@ unchanged. The model repository, its exact revision, vLLM 0.28.0 and the public 
 were checked to exist at revision time. Synthetic tests cover the step ordering, the
 checklist, error and partial-run diagnostics and the hint boundaries; they are not a
 live Colab verification. No model was run and no empirical score was produced.
+
+## 2026-09-06: native sampler for the Qwen managed server
+
+The author supplied a private vLLM 0.28.0 startup log from the SM120 runtime.
+Checkpoint loading completed at 50.22 GiB; dummy sampler profiling then failed in
+FlashInfer's JIT architecture check. The final engine initialization exception was
+a consequence. The log establishes neither an out-of-memory failure nor why
+FlashInfer's compilation targets were ineligible. This attempt stopped before the
+scientific worker could run, so it provides no evaluation scores.
+
+Codex checked the pinned vLLM implementation and set
+`VLLM_USE_FLASHINFER_SAMPLER=0` in the managed server's environment before import.
+The native PyTorch sampler is selected consistently across all phases, rather than
+switching after an inference failure. Only explicit engine overrides, never the
+full inherited environment, are recorded in private session metadata. The source
+hash and existing recorded/frozen-method guards also cover this change. Model and
+dependency pins, attention selection, BF16, context length, seeds and sampling
+parameters are unchanged; bitwise equivalence is not asserted.
+
+The rebuilt guided notebook embeds the correction and recognizes this specific
+sampler error with a content-free hint. Existing startup-only workspaces retain
+dataset IDs, pins and cumulative time accounting. Synthetic tests cover inherited
+environment overrides, provenance without secrets, the hint and notebook integrity.
+They do not validate a successful GPU startup, generation or empirical study. No
+held-out scores informed the correction.
+
+Sources: [pinned vLLM sampler](https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/v1/sample/ops/topk_topp_sampler.py),
+[pinned vLLM environment settings](https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/envs.py).

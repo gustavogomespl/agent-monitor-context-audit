@@ -548,6 +548,14 @@ def _run_managed(config, cap, maximum_seconds, startup_seconds, hardware):
     if time_ledger is not None:
         time_ledger.reserve(session_id, seconds)
     started, deadline = time.monotonic(), time.time() + seconds
+    # vLLM 0.28.0 supports this switch before import. Use the native sampler for
+    # every phase, including dummy profiling: FlashInfer's JIT architecture check
+    # failed on the author's SM120 runtime after the checkpoint loaded successfully.
+    engine_environment = dict(
+        VLLM_USE_FLASHINFER_SAMPLER="0",
+        VLLM_NO_USAGE_STATS="1",
+        HF_HUB_DISABLE_TELEMETRY="1",
+    )
     metadata = dict(
         at=utc_now(),
         deadline_epoch=deadline,
@@ -557,6 +565,7 @@ def _run_managed(config, cap, maximum_seconds, startup_seconds, hardware):
         qwen_config=config.qwen.model_dump(),
         hardware=hardware,
         python=sys.version.split()[0],
+        engine_environment=engine_environment,
     )
     store.put("sessions", session_id, metadata)
     command = vllm_command(config)
@@ -590,7 +599,7 @@ def _run_managed(config, cap, maximum_seconds, startup_seconds, hardware):
                 stdout=server_log,
                 stderr=server_log,
                 start_new_session=True,
-                env=dict(os.environ, VLLM_NO_USAGE_STATS="1", HF_HUB_DISABLE_TELEMETRY="1"),
+                env=dict(os.environ, **engine_environment),
             )
             ready_until = min(time.monotonic() + startup_seconds, started + seconds - 10)
             with httpx.Client(trust_env=False, follow_redirects=False, timeout=1) as client:

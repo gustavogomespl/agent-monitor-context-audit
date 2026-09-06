@@ -364,6 +364,8 @@ def test_partial_run_surfaces_the_runner_error_line(workflow, capsys, tmp_path):
     ("RuntimeError: Torch compiled with different CUDA versions than TorchAudio",
      "Torch and TorchAudio"),
     ("torch.OutOfMemoryError: CUDA out of memory", "GPU memory"),
+    ("topk_topp_sampler.py\nRuntimeError: FlashInfer requires GPUs with sm75 or higher",
+     "FlashInfer sampler"),
     ("ValueError: Previous notebook end time is unknown; reconcile", "uncertain"),
     ("progress\ncontext-audit: 3 transcripts exceed context; revise scope before scoring\n",
      "3 transcripts exceed context"),
