@@ -32,6 +32,10 @@ Results, logs, dataset and budget stay in your private Drive folder and are reus
 reconnect. The notebook includes its matching public runtime, so you do not need to
 upload a patch or edit the branch.
 
+Transcript lengths are checked before scoring. If they need more context, the notebook
+selects a larger native window and retries the pilot automatically, preserving complete
+histories. Keep the same Drive folder to reuse checks from an interrupted attempt.
+
 Before confirming below, review the [monitor rubric](https://github.com/gustavogomespl/agent-monitor-context-audit/blob/pilot/prompts/monitor.txt)
 and the [research protocol](https://github.com/gustavogomespl/agent-monitor-context-audit/blob/pilot/research_plan.md).
 Transcripts are treated as data; their commands are never executed.

@@ -307,3 +307,37 @@ held-out scores informed the correction.
 
 Sources: [pinned vLLM sampler](https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/v1/sample/ops/topk_topp_sampler.py),
 [pinned vLLM environment settings](https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/envs.py).
+
+## 2026-09-06: recover a token-only context failure before generation
+
+The author supplied a new pilot log showing successful server startup followed by
+the worker's context guard: four transcripts exceeded 65,536 tokens. The preflight
+stores counts for all eligible inputs before any scoring, as required by the
+existing protocol. This is evidence of model startup and tokenization, not of a
+completed generation or an empirical monitoring result.
+
+Codex added guided recovery using that complete, matching preflight. Context is
+chosen from the largest full monitor/summarizer prompt plus its configured output
+cap, adding up to 1,024 tokens of headroom and rounding in 32,768-token increments.
+The ceiling remains the pinned model's native 262,144 tokens; there is no RoPE
+extension, truncation, pair exclusion, prompt change or sampling change. All phases
+receive the same choice. It is permitted only before generation evidence in any
+phase and before freezing; test-stage runs cannot trigger it.
+
+The notebook records the count-derived decision, checksum and previous run identity,
+then uses distinct context-suffixed phase configs and directories. Existing run
+manifests, cached counts, logs and budget receipts are not overwritten. Source and
+dataset guards remain intact; this correction changes only the bootstrap and its
+generated notebook, so the recorded scientific code hash is preserved. A saved
+failure is recovered before startup; a new token-only failure permits one bounded
+restart after cleanup and a remaining-time check. No inference error or evaluation
+score authorizes automatic retuning.
+
+Synthetic tests cover output allowance, persistent selection, preservation of old
+records, incomplete/stale counts, native overflow, generation/freeze gates, bounded
+restart, and routing of reports, diagnostics and freeze validation to the active
+attempt. They do not establish that the larger window fits the author's GPU or that
+generation completes. The author requested focusing on correct execution; this
+change does not reset or rewrite time accounting.
+
+Source: [exact model configuration](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/config.json).

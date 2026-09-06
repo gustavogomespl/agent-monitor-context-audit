@@ -29,6 +29,10 @@ the unchecked fields and does not mount Drive or execute an experiment.
 - During inference, a line every 30 seconds: model loading, then
   `successful evaluations: k/n`. The first session downloads about 55 GB of weights
   before scoring starts.
+- When context recovery is needed, `Context inventory: ... maximum request plus output:
+  ... Context: 65536 -> ...` shows the measured requirement and selected window.
+  A saved inventory is reused before model startup; a new token-only context failure
+  permits one automatic pilot restart within the remaining allocation.
 - `Finished: executed | Results: …` with the AUROC per condition, then the runtime
   disconnects.
 - On failure: `Stopped: <ErrorClass>: <first message line>`, recognized hints
@@ -64,6 +68,10 @@ The final cell prints full paths. For each phase:
 - `runs-private/notebook-status/latest.json`: workflow status and output locations.
 - `runs-private/notebook-status/last-error.log`: last full private diagnostic.
 - `runs-private/qwen-<phase>/gpu_sessions/server_logs/` and `runner_logs/`: engine/worker logs.
+
+After a context adjustment, active run directories have a `-ctx<tokens>` suffix.
+The original attempt remains intact. Numeric reports still use `numeric-results/<phase>`;
+the printed diagnostic paths point to the active attempt.
 
 Reconnect a GPU, keep the same workspace name, select the next stage and use
 **Run all** again. Successful completed phases are checked against their recorded
@@ -171,6 +179,39 @@ GPU pilot must still confirm startup and inference end to end.
 
 ## Inference contract
 
+### Automatic recovery from a context-only pilot failure
+
+The reported pilot reached the worker successfully but stopped before scoring because
+four full requests exceeded the configured 65,536-token window. The existing preflight
+counts all eligible transcripts, including test inputs for tokenization only. The
+notebook now reads those saved counts before launching the next server. A complete,
+matching inventory determines the largest prompt plus its configured output allowance;
+the notebook adds up to 1,024 tokens of headroom and rounds up in 32,768-token steps,
+within the model's native 262,144-token limit. No RoPE extension is used. The native
+limit is recorded in the [pinned model configuration](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/config.json).
+
+Recovery requires matching source, prompts, configuration and dataset provenance,
+and no generation attempts, cached representations, request reservations, scores or
+completion records in any phase. A frozen protocol blocks it. Counts alone can
+select context; evaluation outcomes cannot. If the inventory exceeds the native
+limit, the workflow stops for scope/model review without exclusions or truncation.
+
+The choice is saved to `configuration/context/selection.json`, with an adjustment
+history, the source preflight checksum and previous run identity. New phase configs
+and run directories use `-ctx<tokens>` names; the original configs, token counts,
+server logs and time receipts are retained. All subsequent stages, freeze checks,
+exports and diagnostics use the same selected context. A new workspace that first
+discovers this issue during its pilot can restart once automatically after the
+server shuts down and the remaining time is checked. Later inference failures do
+not trigger context tuning. The endpoint repeats exact token validation before
+generation. Hardware memory fit and long-context inference still need live validation.
+
+To resume the reported failure, upload the rebuilt notebook, keep the current Drive
+folder and `STAGE = pilot`, confirm the form, then select **Run all**. There is no
+context variable to edit and no configuration file to delete.
+
+### Model, hardware and sampling
+
 Hardware eligibility requires one NVIDIA GPU with at least 75,000 MiB visible
 VRAM and compute capability >=8.0 for native BF16. The session records the actual
 GPU name, memory, driver and compute capability. This admits the author's RTX
@@ -188,7 +229,8 @@ The only Qwen model is `Qwen/Qwen3.8-27B`, shared by independent monitor and
 summarizer requests. vLLM is pinned to 0.28.0; the exact model/tokenizer SHA and
 versions of vLLM, Torch, Transformers, Tokenizers, Triton and Safetensors are
 preserved and checked across runtimes. The default is BF16, tensor parallelism 1,
-one sequence, 65,536 total context tokens, eager execution, chunked prefill,
+one sequence, an initial 65,536-token context with the pre-scoring recovery above,
+eager execution, chunked prefill,
 text-only loading and no prefix cache or speculative decoding. Context capacity
 is a pilot setting, not a demonstrated GPU result. Full is never truncated.
 

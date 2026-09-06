@@ -273,14 +273,128 @@ def prepare_vllm_imports():
     return dict(status="passed", before=before, after=after, torch_runtime=torch_runtime)
 
 
+def phase_settings(phase):
+    """One durable context choice and distinct run identities across all stages."""
+    import json
+
+    if phase not in {"pilot", "development", "test"}:
+        raise ValueError("Choose pilot, development, or test.")
+    selection = DRIVE_ROOT / "configuration/context/selection.json"
+    if not selection.exists():
+        return phase, MAX_MODEL_LEN
+    window = json.loads(selection.read_text())["context_window"]
+    if type(window) is not int or not 2048 <= window <= 262144:
+        raise ValueError("Invalid saved context selection; review the private configuration.")
+    return f"{phase}-ctx{window}", window
+
+
+def phase_run_dir(phase):
+    return Path("runs/private") / ("qwen-" + phase_settings(phase)[0])
+
+
+def prepare_context_window():
+    """Recover a complete token-only pilot preflight, without rewriting its run."""
+    import hashlib
+    import json
+
+    from context_audit.cli import _dataset_manifest
+    from context_audit.provider import utc_now
+    from context_audit.runner import protocol_signature
+    from context_audit.storage import PrivateStore
+
+    if STAGE == "test":
+        return False
+    directory = DRIVE_ROOT / "runs-private" / phase_run_dir("pilot").name
+    preflight_path = directory / "manifests/preflight.json"
+    if not preflight_path.exists():
+        return False
+    preflight = json.loads(preflight_path.read_text())
+    if not preflight.get("context_limit_ids"):
+        return False
+    if any(path.exists() for path in (
+        DRIVE_ROOT / "frozen-source.zip", DRIVE_ROOT / "public-manifests/protocol-v1.json",
+        REPO / "data/manifests/protocol-v1.json",
+    )):
+        raise ValueError("Context recovery cannot change a frozen protocol; review required.")
+    # Include unsuccessful, pending and uncertain requests, not just successful scores.
+    for run in (DRIVE_ROOT / "runs-private").glob("qwen-*"):
+        generation = any((run / name).exists() for name in (
+            "scores.csv", "manifests/completion.json",
+        )) or any(any((run / name).rglob("*")) for name in (
+            "requests", "calls", "results", "representations",
+        )) or any(path.exists() and path.read_text().strip() for path in (
+            run / "budget-seconds.jsonl", run / "budget.jsonl",
+        ))
+        if generation:
+            raise ValueError("Context recovery found generation evidence; preserve runs "
+                             "for review.")
+    name, _ = phase_settings("pilot")
+    if not (DRIVE_ROOT / "configuration" / f"{name}.json").exists():
+        raise ValueError("Context preflight lacks its saved configuration; review required.")
+    config = configured_phase("pilot")
+    manifest = json.loads((directory / "manifests/run.json").read_text())
+    dataset = _dataset_manifest(config)
+    signature = protocol_signature(config, dataset)
+    for key, expected in (("config", config.model_dump()), ("code_hash", signature["code_hash"]),
+                          ("prompt_hashes", signature["prompts"]),
+                          ("dataset_manifest_hash", signature["dataset_manifest_hash"])):
+        if manifest.get(key) != expected:
+            raise ValueError("Context preflight methods or dataset differ; review required.")
+    items = preflight["items"]
+    if not items or len(items) != dataset["counts"]["eligible_transcripts"]:
+        raise ValueError("Context inventory is incomplete; no window was inferred.")
+    ids, problems, required = set(), set(), 0
+    for item in items:
+        identifier = item["transcript_id"]
+        if not isinstance(identifier, str) or not identifier or identifier in ids:
+            raise ValueError("Invalid or duplicate context inventory IDs.")
+        ids.add(identifier)
+        for key in ("body_tokens", "full_input_tokens", "summary_input_tokens"):
+            if type(item[key]) is not int or item[key] < 0:
+                raise ValueError("Invalid context token count; no window was inferred.")
+        if (item["monitor_window"] != config.monitor_context_window
+                or item["summary_window"] != config.summarizer_context_window):
+            raise ValueError("Context inventory window differs from its saved configuration.")
+        monitor = item["full_input_tokens"] + config.monitor_max_tokens
+        summary = item["summary_input_tokens"] + config.summary_max_tokens
+        required = max(required, monitor, summary)
+        if monitor > item["monitor_window"] or summary > item["summary_window"]:
+            problems.add(identifier)
+    if (not problems or len(preflight["context_limit_ids"]) != len(problems)
+            or set(preflight["context_limit_ids"]) != problems):
+        raise ValueError("Context inventory limit IDs disagree with its token counts.")
+    if required > 262144:
+        raise ValueError(f"Full requests require {required} tokens, above the native 262144 "
+                         "limit. Review scope/model; no transcripts were truncated or excluded.")
+    # Native context only: 32K increments with up to 1K headroom for repair prefixes.
+    selected = min(262144, ((required + 1024 + 32767) // 32768) * 32768)
+    previous = config.qwen.max_model_len
+    if selected <= previous:
+        raise ValueError("Context recovery did not produce a larger window; review required.")
+    record = dict(
+        context_window=selected, previous_context_window=previous, required_tokens=required,
+        source_run=str(directory.relative_to(DRIVE_ROOT)), source_run_id=manifest["run_id"],
+        preflight_sha256=hashlib.sha256(preflight_path.read_bytes()).hexdigest(),
+        code_hash=signature["code_hash"], dataset_manifest_hash=signature["dataset_manifest_hash"],
+        reason="Complete token inventory before any generation; retain all full inputs",
+        selected_at=utc_now(),
+    )
+    store = PrivateStore(DRIVE_ROOT / "configuration")
+    store.put("context", f"from-{previous}-to-{selected}", record)
+    store.put("context", "selection", record)
+    print(f"Context inventory: {len(items)} transcripts; maximum request plus output: "
+          f"{required} tokens. Context: {previous} -> {selected}. "
+          "Previous attempt retained; all full inputs preserved.", flush=True)
+    return True
+
+
 def configured_phase(phase):
     import json
 
     from context_audit.runtime_models import AuditConfig, QwenConfig
 
     require_setup()
-    if phase not in {"pilot", "development", "test"}:
-        raise ValueError("Choose pilot, development, or test.")
+    name, window = phase_settings(phase)
     if not DATA_USE_CONFIRMED or not RUBRIC_REVIEWED:
         raise ValueError("Confirm data-use compatibility and review the rubric before generation.")
     pin = json.loads((DRIVE_ROOT / "configuration/model-pin.json").read_text())
@@ -289,7 +403,7 @@ def configured_phase(phase):
         vllm_version=pin["vllm_version"],
         runtime_versions=pin["runtime_versions"],
         base_url="http://127.0.0.1:8000",
-        max_model_len=MAX_MODEL_LEN,
+        max_model_len=window,
         gpu_hourly_rate_usd=GPU_HOURLY_RATE_USD,
         gpu_budget_hours=MAX_GPU_HOURS,
     )
@@ -300,18 +414,18 @@ def configured_phase(phase):
         protocol_version="protocol-v1" if phase == "test" else "development-v1",
         split="test" if phase == "test" else "development",
         dataset_dir="data/private",
-        run_dir=f"runs/private/qwen-{phase}",
+        run_dir=str(phase_run_dir(phase)),
         monitor_model=pin["model_id"],
         summarizer_model=pin["model_id"],
-        monitor_context_window=MAX_MODEL_LEN,
-        summarizer_context_window=MAX_MODEL_LEN,
+        monitor_context_window=window,
+        summarizer_context_window=window,
         pilot_pairs=3 if phase == "pilot" else None,
         timeout_seconds=300,
         data_use_confirmed=DATA_USE_CONFIRMED,
         rubric_reviewed=RUBRIC_REVIEWED,
         protocol_file="data/manifests/protocol-v1.json",
     )
-    path = DRIVE_ROOT / "configuration" / f"{phase}.json"
+    path = DRIVE_ROOT / "configuration" / f"{name}.json"
     payload = config.model_dump()
     if path.exists() and json.loads(path.read_text()) != payload:
         raise ValueError(
@@ -515,7 +629,7 @@ def freeze_reviewed():
 
     with chdir(REPO):
         test_config = configured_phase("test")
-        result = freeze(test_config, Path("runs/private/qwen-development"))
+        result = freeze(test_config, Path(configured_phase("development").run_dir))
         print(json.dumps(result, indent=2))
         tagged = subprocess.run(
             ["git", "rev-parse", "--verify", "protocol-v1^{commit}"],
@@ -788,7 +902,7 @@ def export_phase(phase, seconds):
 
     if seconds <= 1:
         raise ValueError("No remaining time for reports. Reproduce the saved scores on CPU.")
-    run_dir = Path(f"runs/private/qwen-{phase}")
+    run_dir = phase_run_dir(phase)
     numeric = DRIVE_ROOT / "numeric-results" / phase
     numeric.mkdir(parents=True, exist_ok=True)
     commands = []
@@ -822,7 +936,7 @@ def export_phase(phase, seconds):
 
 def private_log_tail(phase):
     """Last 64 KB of the latest private engine and worker logs; never printed verbatim."""
-    sessions = DRIVE_ROOT / "runs-private" / f"qwen-{phase}/gpu_sessions"
+    sessions = DRIVE_ROOT / "runs-private" / phase_run_dir(phase).name / "gpu_sessions"
     details = ""
     for kind in ("server_logs", "runner_logs"):
         logs = list((sessions / kind).glob("*.json"))
@@ -896,7 +1010,7 @@ def describe_partial_phase(phase, config, summary):
     for hint in failure_hints(private_log_tail(phase)):
         print("  " + hint, flush=True)
     print("  Private engine/worker logs:",
-          DRIVE_ROOT / "runs-private" / f"qwen-{phase}/gpu_sessions", flush=True)
+          DRIVE_ROOT / "runs-private" / phase_run_dir(phase).name / "gpu_sessions", flush=True)
 
 
 def form_checklist():
@@ -966,6 +1080,7 @@ def run_guided():
         acquire_data()
         phases = ["pilot", "development"] if STAGE == "development" else [STAGE]
         with chdir(REPO):
+            prepare_context_window()
             if STAGE == "test":
                 freeze_reviewed()
             for phase in phases:
@@ -988,6 +1103,17 @@ def run_guided():
                           "55 GB of weights before scoring; progress prints every 30 seconds.",
                           flush=True)
                     summary = execute_phase(config, available - 150)
+                    if (phase == "pilot" and summary["status"] != "executed"
+                            and prepare_context_window()):
+                        # At most one restart, only after complete token-only preflight.
+                        budget = allocation.checkpoint()
+                        available = min(budget["remaining_seconds"], allocation.remaining())
+                        if available <= 180:
+                            raise ValueError("Context saved; insufficient GPU time to restart.")
+                        config = configured_phase(phase)
+                        print("  Restarting the pilot with the measured context window.",
+                              flush=True)
+                        summary = execute_phase(config, available - 150)
                 result["phases"][phase] = summary
                 allocation.checkpoint()
                 if summary["status"] != "executed":
@@ -1011,7 +1137,8 @@ def run_guided():
         print("Full private diagnostic:",
               DRIVE_ROOT / "runs-private/notebook-status/last-error.log")
         phase = result.get("active_phase", STAGE)
-        print("Server logs:", DRIVE_ROOT / "runs-private" / f"qwen-{phase}/gpu_sessions")
+        print("Server logs:",
+              DRIVE_ROOT / "runs-private" / phase_run_dir(phase).name / "gpu_sessions")
         raise RuntimeError(
             f"Workflow stopped: {reason}. Inspect the saved private diagnostic above."
         ) from None

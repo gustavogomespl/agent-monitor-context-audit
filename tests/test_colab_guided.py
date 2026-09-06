@@ -118,6 +118,42 @@ def test_failed_pilot_does_not_proceed_to_development(workflow):
     assert calls[-2:] == ["account", "disconnect"]
 
 
+def test_token_only_context_failure_restarts_once_before_reporting(workflow):
+    ns, calls = workflow
+    selection_calls = iter([False, True])  # Fresh workspace, then completed context preflight.
+    ns["prepare_context_window"] = lambda: next(selection_calls)
+    runs = []
+
+    def execute(config, seconds):
+        runs.append((config, seconds))
+        return {"status": "partial_or_failed"}
+
+    ns["execute_phase"] = execute
+    result = ns["run_guided"]()
+    assert result["status"] == "partial_or_failed"
+    assert len(runs) == 2  # No retry loop after the one context adjustment.
+    assert all(seconds == 39850 for _, seconds in runs)
+    assert calls.count("report-pilot") == 1
+    assert calls[-2:] == ["account", "disconnect"]
+
+
+def test_context_restart_rechecks_remaining_allocation(workflow):
+    ns, calls = workflow
+    selections = iter([False, True])
+    ns["prepare_context_window"] = lambda: next(selections)
+
+    def execute(config, seconds):
+        calls.append("first-run")
+        ns["NotebookAllocation"].remaining = lambda self: 100
+        return {"status": "partial_or_failed"}
+
+    ns["execute_phase"] = execute
+    with pytest.raises(RuntimeError, match="insufficient GPU time"):
+        ns["run_guided"]()
+    assert calls.count("first-run") == 1
+    assert calls[-2:] == ["account", "disconnect"]
+
+
 @pytest.mark.parametrize("boundary", ["check_gpu", "prepare_source", "install_runtime",
                                      "acquire_data", "execute_phase", "export_phase"])
 def test_every_failure_releases_gpu_and_preserves_failure_status(workflow, boundary):
