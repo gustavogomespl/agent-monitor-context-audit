@@ -204,3 +204,78 @@ not imply review of family grouping, rubric or pilot outputs. The existing priva
 data boundaries, explicit live opt-in, development-before-test freeze and null-score
 failure policy remain in effect. No real model inference or empirical scores were
 produced by this amendment.
+
+## 2026-09-06: TorchAudio CUDA build and setup import validation
+
+The author's real Colab startup log identified a binary mismatch: Torch reported
+CUDA 13.0 while TorchAudio reported CUDA 12.8. The model server exited during an
+import; the log does not demonstrate model loading, memory fit or inference.
+
+Codex checked the tagged vLLM 0.28.0 CUDA requirements (Torch 2.13.0 and TorchAudio
+2.11.0), TorchAudio's documented stable ABI compatibility and the official cu130
+wheel index, including the Python 3.13 Linux wheel. The notebook now replaces the
+mismatched auxiliary wheel with `torchaudio==2.11.0+cu130` only for this verified
+Torch/vLLM/CUDA combination. `--no-deps` preserves core runtime pins. A fresh
+subprocess imports TorchAudio and the vLLM API server module before setup is marked
+ready; it starts no server or model. Before/after package versions are retained in
+private setup history. A failed repeated setup clears the previous ready flag.
+
+Synthetic boundary tests cover repair, unchanged core packages, compatible wheels,
+failed installs/imports, unsupported combinations and failed repeated setup. They
+are not a live verification of the repaired Colab runtime. No protocol settings or
+test-set scores informed this dependency correction.
+
+## 2026-09-06: author-requested guided Colab workflow
+
+The author requested a notebook that executes end to end with a friendlier interface.
+Codex replaced the separate setup/acquisition/live/analysis flags with a native Colab
+form and one guided run. Explicit start, data-use and rubric confirmations remain.
+Pilot includes its report; development finishes/reuses the pilot before evaluating
+all development pairs. Test is a later explicit selection requiring reviewed
+successful development; the existing local freeze validation runs before scoring.
+The scientific runner, four conditions, prompt texts and frozen-method checks are
+unchanged. Combining ordered setup/freeze/run/report actions in one selected stage
+does not authorize automatic progression to the held-out stage.
+
+The notebook embeds checksummed public runtime source and bootstrap scripts to
+repair recognized older checkouts without a separate upload or branch push. It
+prevalidates paths and hashes, backs up changed source privately, rejects unknown
+local edits and protects recorded scientific code hashes and frozen snapshots.
+Weights, dependencies and private data are not embedded. The generator and readable
+bootstrap scripts are the source of truth; a regression test detects a stale payload.
+
+A notebook allocation receipt measures setup, acquisition and bounded reporting
+in addition to the existing supervised model interval. Checkpoints subtract already
+charged supervisor time before adding overhead. Existing initial debits are read
+from the immutable ledger instead of repeated form edits. A release timer bounds
+the active workflow; cleanup also requests release on setup and model failures.
+Known failed-setup overhead is recoverable once. Unknown end times still require
+verified reconciliation, and Colab allocation outside the workflow remains outside
+these measurements. Unknown USD costs remain null. This replaces the earlier
+instruction to always perform reporting in a separate CPU-only session; reports
+now have a 120-second subprocess deadline within the remaining shared allowance.
+
+Offline synthetic tests cover ordering, consent/review gates, successful reuse,
+partial-run stops, cleanup, budget recovery without double charging, and snapshot
+integrity. They do not demonstrate a loaded Qwen model or completed scientific study.
+
+## 2026-09-06: Colab entry point and run diagnostics
+
+The author asked to revise the project so the guided Qwen notebook runs intuitively
+on Colab. Claude Code changed only the operating surface. The README and the guide
+link the notebook committed on the `pilot` branch through Colab's GitHub loader, with
+upload as the alternative; the badge serves whatever is pushed. The notebook now checks
+the GPU before mounting Drive, so a CPU runtime stops without side effects and names
+the runtime-type fix; a stopped run prints the error class and first message line,
+recognized hints and the private diagnostic path instead of a generic message; an
+incomplete phase prints the runner exit code, successful/expected evaluations, counts
+per evaluation status and the worker's final handled error line; the inert default
+prints which form fields are unchecked; dependency installation is quiet except for
+errors. Pydantic validation details and log excerpts remain only in the private Drive
+diagnostic, so notebook output never repeats benchmark text.
+
+The scientific runner, prompts, budgets, consents, freeze gates and pinned versions are
+unchanged. The model repository, its exact revision, vLLM 0.28.0 and the public branch
+were checked to exist at revision time. Synthetic tests cover the step ordering, the
+checklist, error and partial-run diagnostics and the hint boundaries; they are not a
+live Colab verification. No model was run and no empirical score was produced.

@@ -1,93 +1,149 @@
 # Qwen3.8-27B on Colab
 
-Open `notebooks/03_qwen_colab.ipynb` through Colab's **File → Upload notebook**.
-The default source is this GitHub repository's `pilot` branch. Set `BRANCH` to
-another published branch when needed; `CODE_REF` optionally selects an exact
-40-character commit. Default Run All performs no
-installation, download, Drive mounting, data acquisition or model generation.
+## Run in four steps
 
-## Running the notebook
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gustavogomespl/agent-monitor-context-audit/blob/pilot/notebooks/03_qwen_colab.ipynb)
 
-1. In a preparation runtime, set `BRANCH="pilot"`, `RUN_SETUP=True` and allow Drive
-   mounting. Setup clones `https://github.com/gustavogomespl/agent-monitor-context-audit.git`,
-   fetches the selected branch, checks out its exact commit and saves it in
-   `configuration/code-pin.json` on Drive. It also installs dependencies and saves
-   the model/runtime pins; it never starts a model. No ZIP is required.
-2. Set `RUN_ACQUIRE=True` once. The official pinned benchmark is acquired and
-   inventoried privately. Existing records retain their opaque IDs and split on
-   reconnect. Review the family grouping and fixed rubric before generation.
-3. Select an eligible GPU runtime (for example H100 or RTX PRO 6000 Blackwell)
-   and rerun setup. Keep `MAX_GPU_HOURS=12.0`, `MAX_COST_USD=None` and
-   `GPU_HOURLY_RATE_USD=None`. Before the first live run, set
-   `GPU_ALREADY_USED_HOURS` to GPU allocation already spent on setup or idle.
-   Complete the data-use/rubric confirmation flags after review. Use
-   `PHASE="pilot"`, `RUN_LIVE=True`. All eligible full
-   requests are counted before generation; an oversized input stops the run.
-4. Inspect private pilot results, failure rates, observed summary lengths and
-   actual context/memory behavior. Complete `PHASE="development"` only after
-   choosing final methods. The pilot evaluates three pairs; full development
-   evaluates every development pair. Their distinct run directories share the
-   same cumulative GPU-hour allowance.
-5. With generation disabled, explicitly enable `RUN_FREEZE` and
-   `REVIEWED_FREEZE` after reviewing complete development evidence. The notebook
-   creates a local protocol commit/tag and durable source snapshot; it never
-   pushes. Run test separately with `PHASE="test"` and `RUN_TEST=True`; it consumes
-   the remaining shared GPU-hour allowance.
-6. Numeric exports and offline reports persist on Drive. `RUN_ANALYSIS=True`
-   reproduces them without generation. Notebook 02 uses the same frozen bootstrap
-   parameters. Keep notebook outputs empty when committing or sharing.
+1. Open `notebooks/03_qwen_colab.ipynb` with the badge above, which loads the
+   committed notebook from the `pilot` branch through Colab's GitHub loader, or
+   use **File → Upload notebook**. Push a rebuilt notebook before relying on the badge.
+2. Select one eligible GPU runtime with **Runtime → Change runtime type**:
+   H100 80GB or RTX PRO 6000 Blackwell 96GB.
+3. Leave **STAGE = pilot** for the first run. Confirm data use and rubric review,
+   then check **START_RUN**. Keep the optional workspace name unchanged to resume
+   the existing experiment. The test review checkbox is only needed for test.
+4. Select **Runtime → Run all** and allow Google Drive access when asked.
 
-The author authorized **12 cumulative GPU hours without a USD cap** on 2026-09-06.
-The notebook's default session is at most one hour, reduced when the shared
-remaining allowance is smaller. The time ledger persists on Drive and covers
-pilot, development, test and resumptions within the same private workspace.
-Its initial cap and prior-use debit are immutable; keep `GPU_ALREADY_USED_HOURS`
-unchanged when resuming. A new run directory does not replenish that allowance.
-For setup/idle allocation on later GPU runtimes, set `GPU_ADDITIONAL_USED_HOURS`
-and a stable unique `GPU_ADDITIONAL_USAGE_ID` for the observed period before live
-execution. Repeating the same ID and duration is idempotent; a new period needs a
-new ID. This adds explicit outside-block usage to the shared ledger.
+The notebook handles the GPU check, source preparation, dependency installation and
+import checks, acquisition/inventory, supervised generation, numeric export and
+reporting. It saves the report to Drive and releases GPU allocation at the end,
+including setup/error paths. Default Run All without confirmed form fields prints
+the unchecked fields and does not mount Drive or execute an experiment.
 
-The notebook normally disconnects Colab immediately after managed execution;
-private numeric rows and receipts have already been saved. Run exports and reports
-later on CPU with `RUN_ANALYSIS=True`. The supervisor
-measures managed process startup through teardown plus the declared prior use;
-it cannot observe later setup/idle allocation outside its block or guarantee the
-platform's billing cutoff. Declare those extra periods and release
-the runtime promptly. A supplied dollar rate is optional and remains an estimate,
-not a Colab invoice. Without it, USD fields are null rather than a fabricated zero.
-GPU availability and platform session limits remain controlled by Colab.
+## What the output looks like
 
-## Source versions and reconnects
+- A header line: `Stage: pilot | Workspace: … | Model: Qwen/Qwen3.8-27B (vLLM 0.28.0)
+  | Shared budget: 12 GPU hours`, then one `[n/6]` line per step. A CPU runtime
+  stops at step 1 with the runtime-type fix, before Drive is mounted.
+- Dependency installation is quiet; only pip errors and warnings are printed.
+- During inference, a line every 30 seconds: model loading, then
+  `successful evaluations: k/n`. The first session downloads about 55 GB of weights
+  before scoring starts.
+- `Finished: executed | Results: …` with the AUROC per condition, then the runtime
+  disconnects.
+- On failure: `Stopped: <ErrorClass>: <first message line>`, recognized hints
+  (dependency mismatch, GPU memory, context limit, uncertain time) and the private
+  diagnostic path. Validation field details and log excerpts stay on Drive; the
+  notebook output never repeats benchmark text.
+- An incomplete phase prints the runner exit code, `successful evaluations: k/n`,
+  counts per evaluation status and the worker's final handled error line before a
+  partial report is saved.
 
-`BRANCH` selects the published source on the first setup. Later sessions retain
-the saved commit even if the remote branch advances; they do not pull new code
-into an existing experiment. Setup prints the selected commit and Python version.
-Changing the source selection requires a new `DRIVE_ROOT` and fresh `/content`
-runtime so existing records retain their provenance. A reviewed local freeze
-takes precedence and is restored from its durable source snapshot.
+| Stage | Work performed | What happens next |
+| --- | --- | --- |
+| `pilot` | Three development pairs, all four conditions, report | Inspect feasibility and failure rates |
+| `development` | Complete/reuse the pilot, then all eight development pairs, reports | Review full development before test |
+| `test` | Validate reviewed development, freeze locally, evaluate 27 held-out pairs, report | Held-out results stay separate |
 
-For an unpublished working tree, set `PROJECT_ZIP` to the uploaded companion
-`dist/qwen-colab-bundle.zip`. Alternatively clear `REPO_URL` to use the upload
-picker. An existing saved ZIP workspace continues using that source. The ZIP is
-optional; the default Git workflow needs only the uploaded notebook and access
-to the selected repository branch.
+An incomplete pilot stops automatic progression to development. Selecting test
+requires **DEVELOPMENT_REVIEWED**, meaning the author has reviewed the completed
+development results and authorizes the local protocol commit/tag and test run.
+This is a later explicit run; nothing automatically advances from development to
+test. The existing freeze validator still requires complete successful development,
+matching model/runtime/config/prompts/code/data and every planned evaluation unit.
+No public push occurs.
 
-## Acquisition on mounted filesystems
+## Results and reconnects
 
-Some filesystems change the executable permission bit of checked-out files.
-Source verification ignores that worktree bit with command-scoped
-`core.fileMode=false`, while retaining the pinned HEAD, official origin, tracked
-content comparison, decryptor byte comparison and decrypted-payload verification.
-The benchmark is read as data; its transcript commands are never executed.
+The default private folder is `My Drive/agent-monitor-context-audit-private`.
+The final cell prints full paths. For each phase:
 
-For an older pinned notebook that reports `Tracked official source files changed
-after acquisition`, compare `git diff --quiet HEAD --` with `core.fileMode=true`
-and `core.fileMode=false` in `data/private/upstream`. Exit codes 1 and 0,
-respectively, identify permission-only differences. In that case, set
-`git config --local core.fileMode false` in that upstream checkout and rerun the
-acquisition cell. If the second comparison also fails, preserve the source and
-investigate the content or Git error; do not reset files or disable verification.
+- `numeric-results/<phase>/public_scores.csv`: sanitized numeric rows.
+- `numeric-results/<phase>/reproduced/findings.md`: report.
+- `numeric-results/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
+- `runs-private/notebook-status/latest.json`: workflow status and output locations.
+- `runs-private/notebook-status/last-error.log`: last full private diagnostic.
+- `runs-private/qwen-<phase>/gpu_sessions/server_logs/` and `runner_logs/`: engine/worker logs.
+
+Reconnect a GPU, keep the same workspace name, select the next stage and use
+**Run all** again. Successful completed phases are checked against their recorded
+signature and score checksum before being reused without loading the model.
+Partial runs use the existing incremental cache and retry policy. Export and
+analysis use bounded subprocesses (up to 120 seconds per phase); a timeout preserves
+scores and logs and releases the runtime. Reports can also be reproduced later on
+CPU using notebook 02 or the `export` / `analyze` CLI.
+
+## Twelve cumulative GPU hours
+
+The author authorized 12 GPU hours and no USD limit. The same ledger covers pilot,
+development, test and resumptions. The notebook restores its immutable cap and
+initial debit automatically, including the previously recorded 1,800 seconds.
+There is no need to reenter 0.5 hours or maintain the old collection of flags.
+
+**PRIOR_GPU_MINUTES** applies only when creating a brand-new budget. Enter allocation
+already spent before starting the workflow. For an existing budget its saved initial
+debit wins. A new folder is not authorization for another 12 hours: carry all prior
+use into any explicitly exploratory workspace. Time before pressing Run all or
+outside this workflow cannot be inferred; additional observed periods still use
+`record_external_gpu_time` with a unique ID and confirmed duration.
+
+Within a run, the notebook measures setup, acquisition and report overhead and
+charges it to the shared ledger, subtracting time already charged by the managed
+inference supervisor to avoid double counting. Each new model session is capped
+by the remaining allowance and leaves 150 seconds for bounded reports and cleanup.
+A notebook-level timer requests runtime release before the remaining allocation
+expires. The core supervisor independently watches its own process groups.
+These controls cannot certify Colab's billing cutoff or observe allocation outside
+the workflow. Platform availability and disconnection behavior remain Colab's.
+
+A known setup failure saves measured overhead for accounting on the next successful
+setup. A kernel/VM lost without confirmed end time leaves a private unresolved
+`runs-private/notebook-sessions` receipt and stops automatic resumption; review it
+alongside any reserved core GPU session. Neither is silently settled to zero.
+Unknown dollar costs remain null throughout.
+
+## Matching source without manual patches
+
+The notebook contains a compressed, checksummed copy of public runtime source and
+prompts, generated by `scripts/build_qwen_notebook.py`. It contains no benchmark
+content, model weights, credentials or private results. An initial repository clone
+supplies Git provenance; its exact commit stays pinned on Drive. The embedded copy
+repairs recognized old public-source versions without requiring a new branch push
+or a separate patch upload. Changed originals are backed up privately.
+
+All paths and hashes are checked before replacing files. Unknown local edits,
+source symlinks, incompatible recorded scientific code hashes and differing frozen
+source are rejected. Source updates never reset datasets, budget ledgers or results.
+A frozen source snapshot takes precedence. Existing bundle-based workspaces remain
+readable, but a new guided run only needs this notebook.
+
+After changing public runtime code or either bootstrap script, rebuild with:
+
+```bash
+uv run python scripts/build_qwen_notebook.py
+```
+
+Keep committed notebook outputs empty. Setup records the embedded snapshot hash,
+bootstrap hash, Git commit, exact model revision, installed packages and import checks
+in private Drive provenance. A source refresh is not evidence of a successful model run.
+
+## Automatic dependency and acquisition checks
+
+The reported startup failure was Torch CUDA 13.0 versus TorchAudio CUDA 12.8,
+before model loading. For vLLM 0.28.0 / Torch 2.13.0 / CUDA 13.0, setup installs
+`torchaudio==2.11.0+cu130` from the official PyTorch wheel index with `--no-deps`.
+It preserves the pinned Torch and vLLM versions, then imports TorchAudio and the
+vLLM server module in a fresh subprocess without launching a model. Other ABI
+failures stop explicitly; no speculative library upgrade loop is performed.
+
+Sources: [vLLM CUDA requirements](https://github.com/vllm-project/vllm/blob/v0.28.0/requirements/cuda.txt),
+[TorchAudio compatibility](https://docs.pytorch.org/audio/stable/installation.html),
+[official CUDA 13 wheel index](https://download.pytorch.org/whl/cu130/torchaudio/).
+
+Acquisition ignores filesystem-only executable-bit drift with command-scoped
+`core.fileMode=false`. Pinned upstream HEAD/origin, tracked content, decryptor bytes
+and decrypted payloads are still verified. Existing opaque IDs and family splits
+are retained; the notebook never executes transcript commands.
 
 ## Inference contract
 
@@ -134,8 +190,8 @@ repetitions; completed numeric rows survive repeated interruptions.
 
 Each managed GPU session reserves its maximum GPU seconds before process launch.
 Known teardown settles elapsed time. A lost receipt remains conservatively reserved;
-the notebook provides a separate, explicit reconciliation phase using elapsed-time
-evidence. Never set an uncertain session to zero merely to resume. An uncertain
+use `context_audit.colab.reconcile_gpu_session` with confirmed elapsed-time evidence
+before resuming. Never set an uncertain session to zero merely to resume. An uncertain
 individual model request is not automatically sent again.
 
 The shared receipt records used, reserved and remaining seconds even when no

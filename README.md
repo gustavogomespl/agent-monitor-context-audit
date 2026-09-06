@@ -14,27 +14,41 @@ current empirical status is in [findings](reports/findings.md).
 
 ## Qwen on a Colab GPU
 
-The Qwen workflow is in [03_qwen_colab.ipynb](notebooks/03_qwen_colab.ipynb), with
-[setup, GPU-time and recovery instructions](docs/qwen_colab.md). Upload the notebook
-to Colab, select `BRANCH` (default `pilot`) and enable `RUN_SETUP`. Setup clones
-this repository and saves the branch's exact commit for subsequent sessions.
-The companion `dist/qwen-colab-bundle.zip` remains an optional source transfer.
-It uses one pinned `Qwen/Qwen3.8-27B` in BF16 for
-both roles, exact tokenizer counts, thinking disabled and persistent private
-Drive storage. The author set a shared **12 GPU-hour cap, without a USD cap**;
-pilot, development, test and resumptions use the same time allowance. Declare
-prior setup/idle GPU allocation before the first live run. Each phase retains
-explicit opt-in and data-use/rubric confirmation. A dollar rate is optional; absent
-rates produce unavailable USD costs. H100 and RTX PRO 6000 Blackwell meet the hardware
-gate (one GPU, >=75,000 MiB VRAM, native BF16). Default Run All is inert. Model
-performance validation remains pending a real pilot.
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gustavogomespl/agent-monitor-context-audit/blob/pilot/notebooks/03_qwen_colab.ipynb)
+
+1. Open [03_qwen_colab.ipynb](notebooks/03_qwen_colab.ipynb) with the badge above,
+   which loads the committed notebook from the `pilot` branch, or use
+   **File → Upload notebook** in Colab.
+2. **Runtime → Change runtime type** and select an eligible GPU: H100 80GB or
+   RTX PRO 6000 Blackwell 96GB.
+3. In the first form keep **STAGE = pilot**, confirm data use and the rubric review,
+   then tick **START_RUN**.
+4. **Runtime → Run all** and allow Google Drive access when asked.
+
+The notebook checks the GPU, prepares its matching source and dependencies,
+restores or acquires the official dataset, executes the selected stage, saves
+reports and disconnects the runtime. It prints one line per step, a progress line
+every 30 seconds while the model works and, if it stops, the error class and
+message with the private diagnostic path. No branch edits, patch uploads or
+separate setup/acquisition flags are needed. Push a rebuilt notebook before
+relying on the badge. See [the short operating guide](docs/qwen_colab.md).
+
+Choose **pilot** for three development pairs, **development** to finish the pilot
+and all eight development pairs, or **test** after reviewing development. Test
+selection explicitly authorizes the local protocol freeze before held-out scoring.
+The four scientific conditions and failure policy are unchanged.
+
+One pinned `Qwen/Qwen3.8-27B` serves both roles in BF16 with thinking disabled.
+All stages share **12 cumulative GPU hours, without a USD cap**. Existing time
+receipts, model pins, private data and successful evaluations survive reconnects.
+The guided workflow also measures setup/report overhead; time outside the workflow
+still needs explicit accounting. Unknown monetary costs remain null. The GPU
+requires at least 75,000 MiB VRAM and native BF16; eligibility does not prove model
+fit or kernel compatibility. Default Run All is inert until the form is confirmed.
+Real model-performance validation remains pending an authorized pilot.
 
 The local CPU environment remains lightweight; vLLM/CUDA are installed only in
-the explicit Colab setup. The Anthropic workflow below remains available as a
-separate backend; one run never mixes providers.
-The supervisor measures managed runtime plus declared prior use. Colab allocation
-outside its block requires explicit prior/additional usage entries; normal
-completion disconnects after saving private records. Export and analyze later on CPU.
+Colab. The Anthropic workflow below remains a separate backend.
 
 ## Local setup and offline checks
 
