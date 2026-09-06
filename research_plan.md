@@ -1,4 +1,16 @@
 # Agent Monitor Context Audit
+
+> **Infrastructure amendment — 2026-09-06 (English repository note).** The author
+> requested adapting the experiment to `Qwen/Qwen3.8-27B` on a Colab H100 and
+> creating its notebook. For this execution path, a managed local vLLM endpoint
+> replaces the proposed commercial API, with pinned weights/tokenizer/runtime,
+> thinking disabled, exact token counts and explicit GPU-time cost accounting.
+> The original API-only/no-GPU infrastructure assumptions below are superseded
+> for this path. The scientific question, four conditions, paired split, failure
+> policy and development-before-test freeze remain unchanged. See
+> [the implementation contract](docs/plans/qwen-colab.md) and
+> [the operating protocol](docs/qwen_colab.md). No real inference has been run.
+
 ## Plano de pesquisa e implementação para o Codex
 
 **Data:** 5 de setembro de 2026.  

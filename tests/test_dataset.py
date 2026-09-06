@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,9 @@ def test_nested_thinking_is_excluded_from_tool_result(tmp_path):
 def test_inventory_excludes_related_sessions_unpaired_and_malformed_pairs(tmp_path, monkeypatch):
     from context_audit.dataset import inventory_dataset, load_canaries, load_dataset
 
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("data/private/\n")
+    monkeypatch.chdir(tmp_path)
     upstream = tmp_path / "upstream"
     attacks = upstream / "attacks"
     for name in ["alpha", "beta", "gamma", "flow-stage1", "flow-stage2", "unpaired", "broken"]:
@@ -148,6 +152,9 @@ def test_tool_arguments_preserve_literal_keys_and_result_error_flag(tmp_path):
 def test_normalized_artifact_edit_is_detected_before_loading(tmp_path, monkeypatch):
     from context_audit.dataset import inventory_dataset, load_dataset
 
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("data/private/\n")
+    monkeypatch.chdir(tmp_path)
     upstream = tmp_path / "upstream"
     for index in range(3):
         directory = upstream / "attacks" / "synthetic" / str(index)

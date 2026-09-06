@@ -34,6 +34,7 @@ PUBLIC_COLUMNS = (
     "cache_creation_input_tokens",
     "summary_cost_usd",
     "monitor_cost_usd",
+    "infrastructure_cost_usd",
     "cost_usd",
     "cost_is_upper_bound",
     "latency_seconds",
@@ -49,6 +50,7 @@ NUMERIC_COLUMNS = (
     "cache_creation_input_tokens",
     "summary_cost_usd",
     "monitor_cost_usd",
+    "infrastructure_cost_usd",
     "cost_usd",
     "latency_seconds",
 )
@@ -66,6 +68,9 @@ def validate_rows(
         raise ValueError(f"Unexpected public result columns: {sorted(unknown)}")
     if frame.empty:
         return pd.DataFrame(columns=PUBLIC_COLUMNS)
+    # Legacy API rows have no separately billed infrastructure overhead.
+    if "infrastructure_cost_usd" not in frame:
+        frame["infrastructure_cost_usd"] = 0.0
     missing = set(PUBLIC_COLUMNS) - set(frame.columns)
     if missing:
         raise ValueError(f"Missing numeric result columns: {sorted(missing)}")
@@ -90,11 +95,11 @@ def validate_rows(
         raise ValueError("Token, latency and cost measurements cannot be negative")
     if not np.allclose(
         frame["cost_usd"],
-        frame["summary_cost_usd"] + frame["monitor_cost_usd"],
+        frame["summary_cost_usd"] + frame["monitor_cost_usd"] + frame["infrastructure_cost_usd"],
         rtol=1e-7,
         atol=1e-10,
     ):
-        raise ValueError("Total cost must include summary and monitor costs including retries")
+        raise ValueError("Total cost must include summary, monitor, retries and infrastructure")
     bool_map = {
         True: True,
         False: False,
@@ -387,8 +392,9 @@ def report_metrics(
             ),
             "hypothetical_cache_free_cost_usd": None,
             "cached_offline_reanalysis_api_cost_usd": 0.0,
-            "note": "Recorded generation cost includes summary, monitor and retries; "
-            "it reflects actual provider cache usage, not a hypothetical cache-free rerun.",
+            "note": "Recorded cost includes summary, monitor, retries and infrastructure; "
+            "GPU values are supplied-hourly-rate estimates, not invoices or causal "
+            "per-condition costs. No hypothetical cache-free rerun is estimated.",
         },
         "limitations": [
             "Fixed monitor and summarizer; benchmark scenarios do not establish production safety.",

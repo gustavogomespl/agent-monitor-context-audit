@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -71,7 +72,51 @@ class MonitorResult(StrictModel):
         return self.status != "ok" or self.suspicion_score >= 50
 
 
+class QwenConfig(StrictModel):
+    """Pinned single-GPU backend; empty deployment approvals are valid templates only."""
+
+    model_revision: str = Field(default="", pattern=r"^(?:[0-9a-f]{40})?$")
+    vllm_version: str = Field(default="0.28.0", pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+    base_url: str = "http://127.0.0.1:8000"
+    max_model_len: int = Field(default=65536, ge=2048, le=262144)
+    gpu_hourly_rate_usd: float | None = Field(default=None, gt=0)
+    gpu_memory_utilization: float = Field(default=0.90, gt=0, le=0.95)
+    max_num_batched_tokens: int = Field(default=4096, ge=512)
+    dtype: Literal["bfloat16"] = "bfloat16"
+    runtime_versions: dict[str, str] = Field(default_factory=dict)
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    top_p: float = Field(default=0.8, gt=0, le=1)
+    top_k: int = Field(default=20, ge=1)
+    presence_penalty: float = Field(default=1.5, ge=-2, le=2)
+    seed: int = Field(default=20260905, ge=0, le=2**31 - 1)
+
+    @field_validator("base_url")
+    @classmethod
+    def loopback_only(cls, value):
+        url = urlsplit(value)
+        if (
+            url.scheme != "http"
+            or url.hostname not in ("127.0.0.1", "localhost", "::1")
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or url.path not in ("", "/")
+            or url.port is None
+        ):
+            raise ValueError("Qwen must use a loopback HTTP origin with an explicit port")
+        return value.rstrip("/")
+
+    def validate_live(self) -> None:
+        if not self.model_revision or self.gpu_hourly_rate_usd is None:
+            raise ValueError(
+                "Qwen requires an immutable model revision and explicit GPU hourly rate"
+            )
+
+
 class AuditConfig(StrictModel):
+    provider: Literal["anthropic", "qwen_local"] = "anthropic"
+    qwen: QwenConfig | None = None
     protocol_version: str = "development-v1"
     split: Literal["development", "test"] = "development"
     dataset_dir: str = "data/private"
@@ -108,6 +153,11 @@ class AuditConfig(StrictModel):
             raise ValueError("token_maximum must be >= token_minimum")
         if self.split == "test" and self.pilot_pairs is not None:
             raise ValueError("Test runs cannot select pilot_pairs")
+        if self.provider == "qwen_local":
+            if self.qwen is None:
+                raise ValueError("qwen_local requires Qwen backend configuration")
+            if {self.monitor_model, self.summarizer_model} != {"Qwen/Qwen3.8-27B"}:
+                raise ValueError("The Qwen experiment uses Qwen/Qwen3.8-27B for both roles")
         return self
 
 

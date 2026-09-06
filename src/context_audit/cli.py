@@ -191,6 +191,8 @@ def freeze(config, development_run: Path) -> dict:
     if development["prompt_hashes"] != signature["prompts"]:
         raise ValueError("Prompts differ from the completed development run")
     compare = (
+        "provider",
+        "qwen",
         "monitor_model",
         "summarizer_model",
         "monitor_context_window",
@@ -204,8 +206,10 @@ def freeze(config, development_run: Path) -> dict:
         "max_attempts",
         "repetitions",
         "concurrency",
+        "bootstrap_seed",
+        "bootstrap_samples",
     )
-    if any(development["config"][k] != getattr(config, k) for k in compare):
+    if any(development["config"].get(k) != config.model_dump()[k] for k in compare):
         raise ValueError("Test methods differ from the completed development run")
     target = Path(config.protocol_file)
     artifact = dict(
@@ -281,6 +285,9 @@ def export_results(run_dir: Path, output: Path) -> dict:
         for k, v in manifest["config"].items()
         if k not in ("dataset_dir", "run_dir", "prompt_dir", "prices_file", "protocol_file")
     }
+    gpu_receipt = run_dir / "manifests/gpu_costs.json"
+    if gpu_receipt.exists():
+        public["gpu_costs"] = json.loads(gpu_receipt.read_text())
     output.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output / "public_scores.csv", index=False)
     (output / "run_manifest.json").write_text(json.dumps(public, indent=2) + "\n")
@@ -316,8 +323,8 @@ def main(argv=None) -> int:
     analyze.add_argument("--scores", type=Path, default=Path("results/public_scores.csv"))
     analyze.add_argument("--output", type=Path, default=Path("results"))
     analyze.add_argument("--manifest", type=Path, default=Path("results/run_manifest.json"))
-    analyze.add_argument("--bootstrap-samples", type=int, default=2000)
-    analyze.add_argument("--seed", type=int, default=20260905)
+    analyze.add_argument("--bootstrap-samples", type=int, default=None)
+    analyze.add_argument("--seed", type=int, default=None)
     sub.add_parser("scan-public", help="Scan Git candidate files for protected content and secrets")
     args = parser.parse_args(argv)
     try:
@@ -344,9 +351,9 @@ def main(argv=None) -> int:
             if not args.live or not math.isfinite(args.max_cost_usd) or args.max_cost_usd <= 0:
                 raise ValueError("Live run requires --live and a positive finite --max-cost-usd")
             load_dotenv(override=False)
-            if not os.environ.get("ANTHROPIC_API_KEY"):
-                raise ValueError("ANTHROPIC_API_KEY is missing; no paid call was made")
             config = load_config(args.config)
+            if config.provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
+                raise ValueError("ANTHROPIC_API_KEY is missing; no paid call was made")
             inputs, labels = load_dataset(Path(config.dataset_dir), config.split)
             result = run_experiment(
                 config,
@@ -381,7 +388,7 @@ def main(argv=None) -> int:
 
             result = scan_repository()
         print(json.dumps(result, indent=2, allow_nan=False))
-        return 1 if result.get("status") == "failed" else 0
+        return 1 if result.get("status") in ("failed", "partial_or_failed") else 0
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
         print(f"context-audit: {exc}", file=sys.stderr)
         return 2

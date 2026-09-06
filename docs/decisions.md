@@ -1,5 +1,33 @@
 # Protocol and implementation decisions
 
+## 2026-09-06: author-requested Qwen/Colab infrastructure revision
+
+The author explicitly requested adapting the experiment to Qwen and creating a
+Colab notebook after the commit review. The implementation selects one pinned
+`Qwen/Qwen3.8-27B` for both independent roles, BF16 on one H100, with a short-lived
+loopback vLLM server. It retains the original scientific comparison. The legacy
+Anthropic path remains optional; no run mixes backends.
+
+Exact body/request counts replace provider differential estimates for Qwen.
+Model/tokenizer revision, inference package versions, sampling and thinking
+settings are frozen and cached. The pilot first counts all eligible full inputs
+without scoring test examples. GPU request time and managed session overhead have
+separate numeric fields and a documented allocation convention. Session deadline
+and process cleanup are supervised; lost receipts remain reserved until explicit
+reconciliation. This is an estimated GPU cost, not a Colab invoice or a guarantee
+about allocation outside the supervised block.
+
+The same change fixes four independently reproduced defects: acquisition outside
+ignored private roots, ignored frozen bootstrap settings, success exit codes for
+incomplete runs, and shrinking CSVs on interrupted resume. These were identified
+with synthetic fixtures and code review, not empirical test scores.
+
+Codex implemented and reviewed this revision using parallel AI assistance and
+official Qwen/vLLM documentation. The author has authorized the infrastructure
+change, not supplied pilot results, reviewed model outputs, finalized data-use
+terms, or approved a frozen scientific conclusion. No model generation, GPU
+allocation, public push, or local source commit occurred during implementation.
+
 **2026-09-05 — initial implementation; not frozen.** The user supplied
 [research_plan.md](../research_plan.md) and authorized building the project from
 that plan. It remains the scientific scope. The existing Apache-2.0 license is

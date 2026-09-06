@@ -200,11 +200,46 @@ DATASET_COMMIT = "218c58315cc01ff0dc5a100e906c27d82d259521"
 
 
 def _private_dir(path: Path) -> Path:
-    resolved = Path(path).resolve()
-    if "private" not in resolved.parts[2:]:
-        raise DatasetError(
-            "Benchmark artifacts require a directory under a named private directory"
+    """Require the ignored repository boundary, including a durable-storage symlink."""
+    import os
+    import subprocess
+
+    try:
+        repository = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
         )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise DatasetError("Benchmark private artifacts require a Git repository") from exc
+    root = Path(repository.stdout.strip()).resolve()
+    approved = root / "data/private"
+    lexical = Path(os.path.abspath(path))
+    resolved = lexical.resolve()
+    if not lexical.is_relative_to(approved) or not resolved.is_relative_to(approved.resolve()):
+        raise DatasetError(
+            "Benchmark artifacts must stay under the repository's approved data/private root"
+        )
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--", "data/private"],
+        check=True,
+        capture_output=True,
+    )
+    if tracked.stdout:
+        raise DatasetError("Benchmark private artifacts cannot have tracked Git content")
+    # Git cannot inspect a path below a symlink. Check the lexical root itself;
+    # a directory ignore rule excludes all descendants, including future files.
+    ignored = subprocess.run(
+        [
+            "git", "-C", str(root), "check-ignore", "--quiet", "--",
+            "data/private" if approved.is_symlink() else "data/private/",
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if ignored.returncode != 0:
+        raise DatasetError("Benchmark data/private root must be Git-ignored before acquisition")
     resolved.mkdir(parents=True, exist_ok=True)
     return resolved
 

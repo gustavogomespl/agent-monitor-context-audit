@@ -192,7 +192,7 @@ def _figures(metrics: dict, output: Path) -> None:
                 linewidths=1.5,
             )
     ax.set(
-        xlabel="Total recorded generation cost (USD; summary + monitor + retries)",
+        xlabel="Total recorded execution cost (USD; requests + overhead)",
         ylabel="AUROC on common paired cohort",
         ylim=(-0.03, 1.08),
     )
@@ -311,8 +311,8 @@ def _report(metrics: dict) -> str:
         "## Context, cost and latency",
         "",
         "| Condition | Mean realized/full token ratio | Mean measured tokens | Summary USD | "
-        "Monitor USD | Total USD | Mean latency seconds |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "Monitor USD | Infrastructure USD | Total USD | Mean latency seconds |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for condition in CONDITIONS:
         group = metrics["conditions"][condition]
@@ -320,15 +320,19 @@ def _report(metrics: dict) -> str:
             f"| {condition} | {_number(group['realized_token_ratio']['mean'])} | "
             f"{_number(group['representation_tokens']['mean'], 1)} | "
             f"{group['summary_cost_usd']:.6f} | {group['monitor_cost_usd']:.6f} | "
+            f"{group['infrastructure_cost_usd']:.6f} | "
             f"{group['cost_usd']:.6f} | {_number(group['latency_seconds']['mean'])} |"
         )
     lines += [
         "",
-        f"Recorded generation cost: ${metrics['costs']['recorded_generation_cost_usd']:.6f}. "
+        f"Recorded execution cost: ${metrics['costs']['recorded_generation_cost_usd']:.6f}. "
         "Cached offline reanalysis makes no API calls and adds $0 in generation cost. "
-        "Recorded costs include actual cache charges and retries; they do not estimate a "
+        "Recorded costs include attributed calls, retries and any managed GPU overhead; "
+        "they do not estimate a "
         "hypothetical cache-free rerun. Check the private run manifest for execution date, "
-        "official price snapshot, token-counting method, generation configuration and concurrency. "
+        "price basis, token-counting method, generation configuration and concurrency. "
+        "Qwen GPU costs use the supplied hourly rate and are not an invoice; infrastructure "
+        "allocation is a reporting convention, not a causal per-condition measurement. "
         "Row latency is cumulative summary plus monitor call time, not wall-clock throughput.",
         "",
         "Cost uncertainty: "
@@ -336,7 +340,7 @@ def _report(metrics: dict) -> str:
             "the total includes conservative reserved upper bounds for calls whose billed "
             "usage was unavailable; it is not an exact invoice amount."
             if metrics["costs"]["contains_upper_bounds"]
-            else "all recorded costs have reported usage; no unknown-usage bounds occur."
+            else "recorded costs are settled; GPU values remain hourly-rate estimates."
         ),
         "",
         "## Qualitative review",
@@ -374,16 +378,19 @@ def generate_report(
     csv_path: str | Path,
     output_dir: str | Path,
     *,
-    n_bootstrap: int = 2000,
-    seed: int = 20260905,
+    n_bootstrap: int | None = None,
+    seed: int | None = None,
     manifest_path: str | Path | None = None,
 ) -> dict:
-    """Recalculate real sanitized scores into metrics, figures and a review worksheet."""
+    """Recalculate numeric scores using the run's recorded bootstrap settings."""
     source, output = Path(csv_path), Path(output_dir)
     frame = pd.read_csv(source) if source.exists() and source.stat().st_size else pd.DataFrame()
     expected_units = None
+    manifest = {}
     if manifest_path is not None:
-        expected_units = _manifest_units(Path(manifest_path), frame)
+        manifest = json.loads(Path(manifest_path).read_text())
+        expected_units = _manifest_units(manifest, frame)
+    n_bootstrap, seed = _bootstrap_settings(manifest.get("config", {}), n_bootstrap, seed)
     frame = validate_rows(frame, allow_partial_pairs=expected_units is not None)
     if not frame.empty:
         if frame["data_origin"].iloc[0] != "sleight_bench":
@@ -410,9 +417,28 @@ def generate_report(
     return metrics
 
 
-def _manifest_units(path: Path, frame: pd.DataFrame) -> list[dict]:
+def _bootstrap_settings(config: dict, n_bootstrap: int | None, seed: int | None) -> tuple[int, int]:
+    """Resolve legacy defaults without silently overriding recorded protocol choices."""
+    if not isinstance(config, dict):
+        raise ValueError("Run manifest bootstrap configuration must be an object")
+    values = []
+    for name, requested, default, minimum in (
+        ("bootstrap_samples", n_bootstrap, 2000, 1),
+        ("bootstrap_seed", seed, 20260905, 0),
+    ):
+        recorded = config.get(name)
+        if recorded is not None and requested is not None and requested != recorded:
+            raise ValueError(f"Requested {name} conflicts with the recorded bootstrap protocol")
+        value = recorded if recorded is not None else requested
+        value = default if value is None else value
+        if type(value) is not int or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+        values.append(value)
+    return values[0], values[1]
+
+
+def _manifest_units(manifest: dict, frame: pd.DataFrame) -> list[dict]:
     """Verify the numeric plan before using its planned-call coverage denominator."""
-    manifest = json.loads(path.read_text())
     if manifest.get("data_origin") != "sleight_bench":
         raise ValueError("Empirical run manifest must identify real data")
     calls = pd.DataFrame(manifest.get("planned_calls", []))

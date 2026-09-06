@@ -11,9 +11,9 @@ __pycache__/
 build/
 dist/
 .DS_Store
-data/private/
-runs/private/
-notebooks/private/
+data/private
+runs/private
+notebooks/private
 .cache/
 .superpowers/
 htmlcov/

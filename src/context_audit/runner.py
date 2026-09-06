@@ -6,6 +6,7 @@ import csv
 import fcntl
 import hashlib
 import json
+import os
 import random
 import subprocess
 from contextlib import contextmanager
@@ -244,7 +245,14 @@ def code_state() -> dict:
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], text=True, capture_output=True, check=True
     ).stdout.strip()
-    files = sorted([*Path("src").rglob("*.py"), Path("pyproject.toml"), Path("uv.lock")])
+    files = sorted(
+        [
+            *Path("src").rglob("*.py"),
+            Path("pyproject.toml"),
+            Path("uv.lock"),
+            Path("requirements-colab.txt"),
+        ]
+    )
     return dict(commit=commit, hash=digest({str(p): p.read_text() for p in files if p.exists()}))
 
 
@@ -314,6 +322,7 @@ def _public_row(transcript, label, rep, result, summary_calls, monitor_calls, co
         },
         summary_cost_usd=sum(c.get("cost_usd", 0) for c in summary_calls),
         monitor_cost_usd=result.cost_usd,
+        infrastructure_cost_usd=0.0,
         cost_usd=sum(c.get("cost_usd", 0) for c in calls),
         latency_seconds=sum(c.get("latency_seconds", 0) for c in calls),
         cost_is_upper_bound=any(c.get("cost_is_upper_bound", False) for c in calls),
@@ -334,10 +343,24 @@ def write_scores(path: Path, rows: list[dict]) -> None:
     temp.replace(path)
 
 
+def merge_score_rows(existing: list[dict], updates: list[dict]) -> list[dict]:
+    """Upsert units without erasing durable results after a second interruption."""
+
+    def unit(row):
+        return row["transcript_id"], row["condition"], int(row["repetition"])
+
+    merged = {unit(row): row for row in existing}
+    merged.update({unit(row): row for row in updates})
+    return list(merged.values())
+
+
 def require_private_path(path: Path, root: Path) -> None:
-    if not path.resolve().is_relative_to(root.resolve()):
+    lexical, boundary = Path(os.path.abspath(path)), Path(os.path.abspath(root))
+    if not lexical.is_relative_to(boundary) or not path.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"Content-bearing path must remain inside {root}")
-    ignored = subprocess.run(["git", "check-ignore", "--quiet", str(path)], check=False)
+    # Git cannot inspect beneath a symlink; the ignored link is the public boundary.
+    checked = root if root.is_symlink() else path
+    ignored = subprocess.run(["git", "check-ignore", "--quiet", str(checked)], check=False)
     if ignored.returncode != 0:
         raise ValueError("Private output path must be ignored by Git")
 
@@ -394,9 +417,23 @@ def run_experiment(
         )
         if tag.returncode or tag.stdout.strip() != code_state()["commit"]:
             raise ValueError("Test scoring requires HEAD at the reviewed protocol-v1 commit/tag")
-    prices, price_snapshot = load_prices(
-        Path(config.prices_file), [config.monitor_model, config.summarizer_model]
-    )
+    if config.provider == "qwen_local":
+        from context_audit.colab import require_managed_session
+
+        config.qwen.validate_live()
+        require_managed_session(config, max_cost_usd)
+        prices = {}
+        price_snapshot = dict(
+            currency="USD",
+            unit="gpu_hour",
+            rate=config.qwen.gpu_hourly_rate_usd,
+            source="User-supplied effective Colab GPU hourly rate; estimate, not an invoice",
+            accounting="Request duration plus separately measured managed-session overhead",
+        )
+    else:
+        prices, price_snapshot = load_prices(
+            Path(config.prices_file), [config.monitor_model, config.summarizer_model]
+        )
     with run_lock(Path(config.run_dir)):
         return _run_locked(
             config,
@@ -424,14 +461,26 @@ def _run_locked(
 ):
     store = PrivateStore(Path(config.run_dir))
     ledger = BudgetLedger(store, max_cost_usd)
-    provider = AnthropicProvider(
-        store,
-        ledger,
-        prices,
-        timeout=config.timeout_seconds,
-        max_calls=config.max_calls,
-        canaries=canaries,
-    )
+    if config.provider == "qwen_local":
+        from context_audit.qwen_provider import QwenProvider
+
+        provider = QwenProvider(
+            store,
+            ledger,
+            config.qwen,
+            timeout=config.timeout_seconds,
+            max_calls=config.max_calls,
+            canaries=canaries,
+        )
+    else:
+        provider = AnthropicProvider(
+            store,
+            ledger,
+            prices,
+            timeout=config.timeout_seconds,
+            max_calls=config.max_calls,
+            canaries=canaries,
+        )
     models = {
         name: provider.model_info(name) for name in {config.monitor_model, config.summarizer_model}
     }
@@ -478,9 +527,16 @@ def _run_locked(
         raise ValueError("Run directory has a different protocol; use a new explicit run directory")
     if not previous:
         store.put("manifests", "run", manifest.model_dump())
+    # The Qwen pilot inventories every eligible full input (including test inputs,
+    # tokenization only) so the context limit can be chosen before any test scoring.
+    preflight_transcripts = transcripts
+    if config.provider == "qwen_local":
+        from context_audit.dataset import load_dataset
+
+        preflight_transcripts, _ = load_dataset(Path(config.dataset_dir))
     # Inventory ALL full monitor and summarizer requests before any score generation.
     preflight, problems = [], []
-    for t in transcripts:
+    for t in preflight_transcripts:
         body = render_body(t)
         # Establish body counts for every input before any paid generation. Later
         # representation creation can use these cached measurements without guessing.
@@ -488,11 +544,15 @@ def _run_locked(
         monitor_count = provider.count_request(
             config.monitor_model, prompts(config)["monitor"], build_monitor_prompt(t, body)
         )
+        summary_budget = budget_for(
+            body_tokens, config.token_fraction, config.token_minimum, config.token_maximum
+        )
         summary_counts = [
             provider.count_request(
                 config.summarizer_model,
                 prompts(config)["summary_common"] + "\n" + prompts(config)[fmt],
-                "Token ceiling: 1024.\n" + build_monitor_prompt(t, body),
+                f"Token ceiling: {summary_budget}, "
+                "counted in the monitor model token unit.\n" + build_monitor_prompt(t, body),
             )
             for fmt in ("summary_free", "summary_structured")
         ]
@@ -513,8 +573,22 @@ def _run_locked(
     if problems:
         raise ValueError(f"{len(problems)} transcripts exceed context; revise scope before scoring")
     by_id = {t.transcript_id: t for t in transcripts}
+    score_path = Path(config.run_dir) / "scores.csv"
     rows = []
+    if score_path.exists():
+        import pandas as pd
+
+        from context_audit.metrics import validate_rows
+
+        rows = validate_rows(pd.read_csv(score_path), allow_partial_pairs=True).to_dict("records")
+    finished = {
+        (r["transcript_id"], r["condition"], int(r["repetition"]))
+        for r in rows
+        if r["status"] == "ok"
+    }
     for item in schedule:
+        if (item["transcript_id"], item["condition"], item["repetition"]) in finished:
+            continue
         t = by_id[item["transcript_id"]]
         rep, summary_calls = make_representation(
             t, item["condition"], config, provider, store, item["repetition"], summary_window
@@ -537,8 +611,8 @@ def _run_locked(
             config,
             item["repetition"],
         )
-        rows.append(row)
-        write_scores(Path(config.run_dir) / "scores.csv", rows)
+        rows = merge_score_rows(rows, [row])
+        write_scores(score_path, rows)
     state = dict(
         status="executed" if all(r["status"] == "ok" for r in rows) else "partial_or_failed",
         run_id=run_id,

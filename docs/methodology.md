@@ -1,5 +1,12 @@
 # Methodology
 
+**Qwen/Colab amendment (2026-09-06):** the author-requested Qwen execution path
+uses the same experimental comparison described here, with exact Qwen tokenizer
+counts and a managed H100 runtime. Model/runtime pins, non-thinking sampling,
+cost attribution, process cleanup and recovery are specified in
+[Qwen Colab](qwen_colab.md). Commercial API-specific details below describe the
+retained Anthropic backend. No empirical model results exist for either path.
+
 **Status:** implementation protocol; empirical pilot and test results do not yet
 exist. The user-supplied [research plan](../research_plan.md) defines the scope.
 Defaults may change using development data before freeze. This document records

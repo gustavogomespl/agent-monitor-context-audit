@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
   "anthropic>=0.66", "pydantic>=2.11", "numpy>=2.0", "pandas>=2.2",
-  "scikit-learn>=1.6", "matplotlib>=3.9", "PyYAML>=6.0", "python-dotenv>=1.0",
+  "scikit-learn>=1.6", "matplotlib>=3.9", "PyYAML>=6.0", "python-dotenv>=1.0", "httpx>=0.28",
 ]
 
 [project.optional-dependencies]

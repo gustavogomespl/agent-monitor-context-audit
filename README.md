@@ -12,6 +12,21 @@ directional hypothesis that structured summaries improve AUROC is untested.
 The full scope is in the user-supplied [research plan](research_plan.md), and
 current empirical status is in [findings](reports/findings.md).
 
+## Qwen on a Colab H100
+
+The Qwen workflow is in [03_qwen_colab.ipynb](notebooks/03_qwen_colab.ipynb), with
+[setup, cost and recovery instructions](docs/qwen_colab.md). Upload the notebook
+to Colab and use the companion `dist/qwen-colab-bundle.zip` to transfer the current
+source without a public push. It uses one pinned `Qwen/Qwen3.8-27B` in BF16 for
+both roles, exact tokenizer counts, thinking disabled and persistent private
+Drive storage. Each phase requires explicit opt-in, a positive GPU rate/cap and
+data-use/rubric confirmation. Default Run All is inert. Actual H100 and model
+performance validation remains pending a real pilot.
+
+The local CPU environment remains lightweight; vLLM/CUDA are installed only in
+the explicit Colab setup. The Anthropic workflow below remains available as a
+separate backend; one run never mixes providers.
+
 ## Local setup and offline checks
 
 Python 3.11+ and [uv](https://docs.astral.sh/uv/) are required. No GPU, agent
