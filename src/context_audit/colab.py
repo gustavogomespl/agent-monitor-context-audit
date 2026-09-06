@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import json
 import math
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -69,17 +71,130 @@ def vllm_command(config: AuditConfig) -> list[str]:
     ]
 
 
-def require_managed_session(config: AuditConfig, max_cost_usd: float) -> None:
+def _time_receipt(ledger: BudgetLedger) -> dict:
+    return dict(
+        budget_dir=str(ledger.store.root),
+        limit_seconds=ledger.limit,
+        committed_seconds=ledger.committed,
+        remaining_seconds=max(0.0, ledger.limit - ledger.committed),
+        uncertain_sessions=sorted(set(ledger.amounts) - ledger.settled),
+    )
+
+
+def initialize_gpu_budget(
+    run_dir: Path, max_gpu_hours: float, *, previously_used_seconds: float = 0,
+) -> dict:
+    """Pin one cumulative budget for all sibling phase directories, in seconds."""
+    from context_audit.runner import run_lock
+
+    if (
+        not math.isfinite(max_gpu_hours) or max_gpu_hours <= 0
+        or not math.isfinite(previously_used_seconds) or previously_used_seconds < 0
+        or previously_used_seconds > max_gpu_hours * 3600
+    ):
+        raise ValueError("Finite positive GPU hours and valid previously used seconds required")
+    budget_dir = Path(run_dir).parent / "gpu_budget"
+    with run_lock(budget_dir / "supervisor"):
+        return _initialize_gpu_budget(budget_dir, max_gpu_hours, previously_used_seconds)
+
+
+def _initialize_gpu_budget(budget_dir, hours, prior):
+    store = PrivateStore(budget_dir)
+    pin = dict(limit_seconds=hours * 3600, previously_used_seconds=prior)
+    saved = store.get("manifests", "limit")
+    if saved and saved != pin:
+        raise ValueError("Cumulative GPU budget or initial debit differs from its saved value")
+    if saved is None:
+        store.put("manifests", "limit", pin)
+    ledger = BudgetLedger(store, pin["limit_seconds"], unit="seconds")
+    if prior:
+        key = "previously_used_gpu_time"
+        if key not in ledger.amounts:
+            ledger.reserve(key, prior)
+        if key not in ledger.settled:
+            ledger.settle(key, prior)
+    return _time_receipt(ledger)
+
+
+def _gpu_time_ledger(run_dir, hours):
+    if hours is None:
+        return None
+    store = PrivateStore(Path(run_dir).parent / "gpu_budget")
+    saved = store.get("manifests", "limit")
+    if saved is None:
+        _initialize_gpu_budget(store.root, hours, 0)
+    elif saved["limit_seconds"] != hours * 3600:
+        raise ValueError("Cumulative GPU budget differs from its saved value")
+    else:
+        _initialize_gpu_budget(store.root, hours, saved["previously_used_seconds"])
+    return BudgetLedger(store, hours * 3600, unit="seconds")
+
+
+def record_external_gpu_time(
+    run_dir: Path,
+    max_gpu_hours: float,
+    *,
+    usage_id: str,
+    elapsed_seconds: float,
+    confirmed: bool = False,
+) -> dict:
+    """Debit verified setup/idle allocation once, without replenishing the shared cap.
+
+    Each distinct allocation period needs its own stable user-supplied identity.
+    This is reported past use, so an overrun is preserved before stopping the run.
+    """
+    from context_audit.runner import run_lock
+
+    if (
+        confirmed is not True
+        or type(max_gpu_hours) not in (int, float)
+        or not math.isfinite(max_gpu_hours) or max_gpu_hours <= 0
+        or type(elapsed_seconds) not in (int, float)
+        or not math.isfinite(elapsed_seconds) or elapsed_seconds < 0
+        or not isinstance(usage_id, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", usage_id) is None
+    ):
+        raise ValueError("Confirm finite external GPU elapsed seconds and a safe stable usage ID")
+    budget_dir = Path(run_dir).parent / "gpu_budget"
+    key = f"external-{usage_id}"
+    with run_lock(budget_dir / "supervisor"):
+        ledger = _gpu_time_ledger(run_dir, max_gpu_hours)
+        saved = ledger.store.get("external_usage", key)
+        if saved is not None and saved["elapsed_seconds"] != elapsed_seconds:
+            raise ValueError("External GPU usage differs from the saved debit for this ID")
+        if key in ledger.settled:
+            if ledger.amounts[key] != elapsed_seconds:
+                raise ValueError("External GPU usage differs from its settled ledger amount")
+            return _time_receipt(ledger)
+        if saved is None:
+            ledger.store.put("external_usage", key, dict(
+                usage_id=usage_id, elapsed_seconds=elapsed_seconds,
+                confirmed_by_user=True, at=utc_now(),
+            ))
+        if key not in ledger.amounts:
+            ledger.reserve(key, min(elapsed_seconds, max(0.0, ledger.limit - ledger.committed)))
+        # Settlement journals the actual reported use even if it exceeds the cap,
+        # then raises; later budget access also fails instead of granting more time.
+        ledger.settle(key, elapsed_seconds)
+        return _time_receipt(ledger)
+
+
+def require_managed_session(config: AuditConfig, max_cost_usd: float | None) -> None:
     session_id = os.environ.get("CONTEXT_AUDIT_GPU_SESSION", "")
     if not session_id:
         raise ValueError("Qwen live runs require the managed Colab supervisor")
     store = PrivateStore(Path(config.run_dir) / "gpu_sessions")
     session = store.get("sessions", session_id)
-    ledger = BudgetLedger(store, max_cost_usd)
+    ledgers = []
+    if max_cost_usd is not None:
+        ledgers.append(BudgetLedger(store, max_cost_usd))
+    time_ledger = _gpu_time_ledger(config.run_dir, config.qwen.gpu_budget_hours)
+    if time_ledger is not None:
+        ledgers.append(time_ledger)
     if (
-        not session
-        or session_id not in ledger.amounts
-        or session_id in ledger.settled
+        not session or not ledgers
+        or any(session_id not in ledger.amounts or session_id in ledger.settled
+               for ledger in ledgers)
         or session["deadline_epoch"] <= time.time()
         or session["hourly_rate_usd"] != config.qwen.gpu_hourly_rate_usd
         or session["qwen_config"] != config.qwen.model_dump()
@@ -92,68 +207,135 @@ def reconcile_gpu_session(
     session_id: str,
     *,
     elapsed_seconds: float,
-    max_cost_usd: float,
+    max_cost_usd: float | None = None,
     confirmed: bool = False,
 ) -> None:
     """Record user-verified elapsed runtime after a lost supervisor/VM receipt."""
+    from context_audit.runner import run_lock
+
     if not confirmed or not math.isfinite(elapsed_seconds) or elapsed_seconds < 0:
         raise ValueError(
             "Explicitly confirm the observed GPU elapsed seconds before reconciliation"
         )
-    store = PrivateStore(Path(run_dir) / "gpu_sessions")
-    ledger = BudgetLedger(store, max_cost_usd)
+    run_dir = Path(run_dir)
+    store = PrivateStore(run_dir / "gpu_sessions")
     session = store.get("sessions", session_id)
-    if not session or session_id not in ledger.amounts or session_id in ledger.settled:
+    if not session:
         raise ValueError("Session is absent or already settled")
-    ledger.settle(session_id, elapsed_seconds * session["hourly_rate_usd"] / 3600)
-    store.put(
-        "sessions",
-        session_id,
-        dict(
-            **session,
-            reconciliation=dict(
-                elapsed_seconds=elapsed_seconds,
-                confirmed_by_user=True,
-                at=utc_now(),
+    if session.get("deadline_epoch", 0) > time.time():
+        raise ValueError("Wait for the active session deadline before reconciliation")
+    hours = session.get("gpu_budget_hours")
+    lock_dir = run_dir.parent / "gpu_budget" if hours is not None else run_dir
+    with run_lock(lock_dir / "supervisor"):
+        ledgers = []
+        if max_cost_usd is not None:
+            ledgers.append((BudgetLedger(store, max_cost_usd),
+                            elapsed_seconds * session["hourly_rate_usd"] / 3600))
+        time_ledger = _gpu_time_ledger(run_dir, hours)
+        if time_ledger is not None:
+            ledgers.append((time_ledger, elapsed_seconds))
+        if not ledgers or any(session_id not in ledger.amounts for ledger, _ in ledgers):
+            raise ValueError("Session is absent or already settled")
+        if all(session_id in ledger.settled for ledger, _ in ledgers):
+            raise ValueError("Session is absent or already settled")
+        for ledger, amount in ledgers:
+            if session_id not in ledger.settled:
+                ledger.settle(session_id, amount)
+        store.put("sessions", session_id, dict(
+            **session, reconciliation=dict(
+                elapsed_seconds=elapsed_seconds, confirmed_by_user=True, at=utc_now(),
             ),
-        ),
-    )
-    finalize_gpu_costs(Path(run_dir), max_cost_usd)
+        ))
+        finalize_gpu_costs(run_dir, max_cost_usd)
 
 
-def finalize_gpu_costs(run_dir: Path, max_cost_usd: float) -> dict:
-    """Allocate measured session overhead equally across observed evaluation units."""
+def _dollar_ledger_seconds(ledger: BudgetLedger | None, sessions: dict) -> float | None:
+    """Recover measured or conservative time from older USD-only session journals."""
+    if ledger is None:
+        return None
+    seconds = 0.0
+    for key, amount in ledger.amounts.items():
+        session = sessions.get(key, {})
+        measured = session.get("elapsed_seconds", session.get("reconciliation", {}).get(
+            "elapsed_seconds"
+        ))
+        if key in ledger.settled and measured is not None:
+            seconds += measured
+        else:
+            rate = session.get("hourly_rate_usd")
+            if not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate <= 0:
+                return None
+            seconds += amount * 3600 / rate
+    return seconds
+
+
+def finalize_gpu_costs(run_dir: Path, max_cost_usd: float | None = None) -> dict:
+    """Report elapsed GPU time and optional estimated USD; unknown USD stays null."""
     import pandas as pd
 
     from context_audit.metrics import validate_rows
     from context_audit.runner import write_scores
 
+    run_dir = Path(run_dir)
     store = PrivateStore(run_dir)
-    ledger = BudgetLedger(PrivateStore(run_dir / "gpu_sessions"), max_cost_usd)
-    uncertain = bool(set(ledger.amounts) - ledger.settled)
+    session_store = PrivateStore(run_dir / "gpu_sessions")
+    sessions = {path.stem: json.loads(path.read_text())
+                for path in (session_store.root / "sessions").glob("*.json")}
+    usd_ledger = BudgetLedger(session_store, max_cost_usd) if max_cost_usd is not None else None
+    hours = next((s["gpu_budget_hours"] for s in sessions.values()
+                  if s.get("gpu_budget_hours") is not None), None)
+    time_ledger = _gpu_time_ledger(run_dir, hours)
+    if time_ledger is not None:
+        amounts = {key: time_ledger.amounts[key] for key in sessions if key in time_ledger.amounts}
+        uncertain = bool(set(amounts) - time_ledger.settled)
+        seconds = sum(amounts.values())
+        cost = (sum(amount * sessions[key]["hourly_rate_usd"] / 3600
+                    for key, amount in amounts.items())
+                if amounts and all(sessions[key]["hourly_rate_usd"] is not None
+                                   for key in amounts) else None)
+    else:
+        uncertain = bool(set(usd_ledger.amounts) - usd_ledger.settled) if usd_ledger else False
+        seconds = _dollar_ledger_seconds(usd_ledger, sessions)
+        cost = usd_ledger.committed if usd_ledger else None
+    if usd_ledger is not None:
+        cost = usd_ledger.committed
+        uncertain |= bool(set(usd_ledger.amounts) - usd_ledger.settled)
     receipt = dict(
-        managed_session_cost_usd=ledger.committed,
+        managed_session_cost_usd=cost,
+        managed_session_seconds=seconds,
         cost_is_upper_bound=uncertain,
-        sessions=len(ledger.amounts),
+        time_is_upper_bound=uncertain,
+        sessions=len(sessions) if sessions else len(usd_ledger.amounts) if usd_ledger else 0,
         allocation="Session cost minus attributed request costs, equally across observed units",
         scope="Managed server startup through teardown; excludes GPU allocation outside this block",
-        price_basis="User-supplied effective hourly rate; not a provider invoice",
+        price_basis=("User-supplied effective hourly rate; not a provider invoice"
+                     if cost is not None else "Unknown; no GPU hourly rate supplied"),
         at=utc_now(),
     )
+    if time_ledger is not None:
+        receipt.update(
+            cumulative_gpu_seconds=time_ledger.committed,
+            remaining_gpu_seconds=max(0.0, time_ledger.limit - time_ledger.committed),
+            gpu_limit_seconds=time_ledger.limit,
+        )
     score_path = run_dir / "scores.csv"
     if score_path.exists():
         frame = validate_rows(pd.read_csv(score_path), allow_partial_pairs=True)
         if not frame.empty:
             request_cost = frame.summary_cost_usd + frame.monitor_cost_usd
-            overhead = max(0.0, ledger.committed - float(request_cost.sum()))
-            frame["infrastructure_cost_usd"] = overhead / len(frame)
-            frame["cost_usd"] = request_cost + frame.infrastructure_cost_usd
+            priced = cost is not None and request_cost.notna().all()
+            overhead = max(0.0, cost - float(request_cost.sum())) if priced else None
+            frame["infrastructure_cost_usd"] = overhead / len(frame) if priced else None
+            frame["cost_usd"] = request_cost + frame.infrastructure_cost_usd if priced else None
+            if not priced:
+                frame["summary_cost_usd"] = None
+                frame["monitor_cost_usd"] = None
             frame["cost_is_upper_bound"] |= uncertain
             write_scores(score_path, frame.to_dict("records"))
             receipt.update(
-                attributed_request_cost_usd=float(request_cost.sum()),
+                attributed_request_cost_usd=float(request_cost.sum()) if priced else None,
                 infrastructure_cost_usd=overhead,
-                reported_total_cost_usd=float(frame.cost_usd.sum()),
+                reported_total_cost_usd=float(frame.cost_usd.sum()) if priced else None,
                 observed_units=len(frame),
             )
             completion = store.get("manifests", "completion")
@@ -190,7 +372,7 @@ def _hardware() -> dict:
     result = subprocess.run(
         [
             "nvidia-smi",
-            "--query-gpu=name,memory.total,driver_version",
+            "--query-gpu=name,memory.total,driver_version,compute_cap",
             "--format=csv,noheader,nounits",
         ],
         capture_output=True,
@@ -199,9 +381,25 @@ def _hardware() -> dict:
         timeout=10,
     )
     cards = [line.split(",") for line in result.stdout.strip().splitlines()]
-    if len(cards) != 1 or "H100" not in cards[0][0] or float(cards[0][1]) < 75000:
-        raise ValueError("This notebook requires one H100 with at least 75,000 MiB visible VRAM")
-    return dict(name=cards[0][0].strip(), memory_mib=float(cards[0][1]), driver=cards[0][2].strip())
+    if len(cards) != 1 or len(cards[0]) != 4:
+        raise ValueError("Expected one NVIDIA GPU with reported memory, driver and capability")
+    name, memory, driver, capability = (value.strip() for value in cards[0])
+    try:
+        memory_mib = float(memory)
+        compute = tuple(int(value) for value in capability.split("."))
+    except ValueError as exc:
+        raise ValueError("Could not verify GPU memory or compute capability") from exc
+    if (
+        not name or not driver or not math.isfinite(memory_mib) or memory_mib < 75000
+        or len(compute) != 2 or any(value < 0 for value in compute) or compute < (8, 0)
+    ):
+        raise ValueError(
+            "One GPU with at least 75,000 MiB VRAM and native BF16 capability >= 8.0 required"
+        )
+    # Hardware eligibility does not attest installed CUDA/vLLM kernel compatibility.
+    return dict(
+        name=name, memory_mib=memory_mib, driver=driver, compute_capability=capability
+    )
 
 
 # This independent watchdog outlives a notebook KeyboardInterrupt or dead kernel.
@@ -274,7 +472,7 @@ def _launch_registered(command, *, store, session_id, control, **popen_kwargs):
 def run_colab_experiment(
     config: AuditConfig,
     *,
-    max_cost_usd: float,
+    max_cost_usd: float | None = None,
     session_max_seconds: float = 3600,
     startup_timeout_seconds: float = 900,
 ) -> dict:
@@ -289,7 +487,10 @@ def run_colab_experiment(
     ):
         raise ValueError("Select Qwen, confirm data use and review the rubric before GPU execution")
     config.qwen.validate_live()
-    for value in (max_cost_usd, session_max_seconds, startup_timeout_seconds):
+    from context_audit.runner import validate_run_budget
+
+    validate_run_budget(config, max_cost_usd)
+    for value in (session_max_seconds, startup_timeout_seconds):
         if not math.isfinite(value) or value <= 0:
             raise ValueError("Explicit positive finite financial and session limits required")
     run_dir = Path(config.run_dir)
@@ -315,7 +516,9 @@ def run_colab_experiment(
             raise ValueError("Qwen port already in use; stop the previous owned server first")
     except (ConnectionRefusedError, TimeoutError):
         pass
-    with run_lock(run_dir / "supervisor"):
+    lock_dir = (run_dir.parent / "gpu_budget"
+                if config.qwen.gpu_budget_hours is not None else run_dir)
+    with run_lock(lock_dir / "supervisor"):
         return _run_managed(
             config, max_cost_usd, session_max_seconds, startup_timeout_seconds, hardware
         )
@@ -324,20 +527,33 @@ def run_colab_experiment(
 def _run_managed(config, cap, maximum_seconds, startup_seconds, hardware):
     run_dir = Path(config.run_dir)
     store = PrivateStore(run_dir / "gpu_sessions")
-    ledger = BudgetLedger(store, cap)
-    if set(ledger.amounts) - ledger.settled:
+    ledger = BudgetLedger(store, cap) if cap is not None else None
+    time_ledger = _gpu_time_ledger(run_dir, config.qwen.gpu_budget_hours)
+    ledgers = [item for item in (ledger, time_ledger) if item is not None]
+    if not ledgers:
+        raise ValueError("A finite GPU time or monetary budget is required")
+    if any(set(item.amounts) - item.settled for item in ledgers):
         raise ValueError("Reconcile the previous uncertain GPU session before allocating another")
     rate = config.qwen.gpu_hourly_rate_usd
-    seconds = min(maximum_seconds, (cap - ledger.committed) * 3600 / rate)
+    seconds = maximum_seconds
+    if ledger is not None:
+        seconds = min(seconds, (cap - ledger.committed) * 3600 / rate)
+    if time_ledger is not None:
+        seconds = min(seconds, time_ledger.limit - time_ledger.committed)
     if seconds <= 15:
         raise ValueError("GPU budget has insufficient remaining time including shutdown allowance")
     session_id = uuid.uuid4().hex
-    ledger.reserve(session_id, seconds * rate / 3600)
+    if ledger is not None:
+        ledger.reserve(session_id, seconds * rate / 3600)
+    if time_ledger is not None:
+        time_ledger.reserve(session_id, seconds)
     started, deadline = time.monotonic(), time.time() + seconds
     metadata = dict(
         at=utc_now(),
         deadline_epoch=deadline,
         hourly_rate_usd=rate,
+        gpu_budget_hours=config.qwen.gpu_budget_hours,
+        gpu_budget_dir=str(time_ledger.store.root) if time_ledger is not None else None,
         qwen_config=config.qwen.model_dump(),
         hardware=hardware,
         python=sys.version.split()[0],
@@ -402,9 +618,7 @@ def _run_managed(config, cap, maximum_seconds, startup_seconds, hardware):
                         "--live",
                         "--config",
                         str(config_file),
-                        "--max-cost-usd",
-                        str(cap),
-                    ],
+                    ] + (["--max-cost-usd", str(cap)] if cap is not None else []),
                     store=store,
                     session_id=session_id,
                     control=control,
@@ -426,7 +640,10 @@ def _run_managed(config, cap, maximum_seconds, startup_seconds, hardware):
         elapsed = time.monotonic() - started
         # Known teardown settles actual elapsed time. SIGKILL/VM loss leaves the
         # reservation intact for explicit user reconciliation on the next session.
-        ledger.settle(session_id, elapsed * rate / 3600)
+        if time_ledger is not None:
+            time_ledger.settle(session_id, elapsed)
+        if ledger is not None:
+            ledger.settle(session_id, elapsed * rate / 3600)
         store.put(
             "sessions",
             session_id,

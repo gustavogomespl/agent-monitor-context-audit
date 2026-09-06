@@ -1,5 +1,25 @@
 # Protocol and implementation decisions
 
+## 2026-09-06: hardware eligibility instead of an H100 name check
+
+During guided setup, the author received an RTX PRO 6000 Blackwell Server Edition
+with 97,887 MiB, not the originally planned H100. A user-run PyTorch BF16 matrix
+check succeeded with compute capability 12.0 and CUDA 13.0. Codex replaced the
+literal H100 name check with one-GPU, >=75,000 MiB and native BF16 capability
+>=8.0 requirements, retaining actual hardware provenance in every session.
+NVIDIA and vLLM documentation support hardware eligibility; Qwen startup and
+generation remain untested. This is a pre-pilot infrastructure adjustment, not
+evidence about monitoring quality. Differences in GPU hardware must be reported.
+
+## 2026-09-06: acquisition permission-bit compatibility
+
+The author reported an acquisition failure in Colab. A read-only diagnostic
+returned Git diff exit code 1 with `core.fileMode=true` and 0 with it disabled,
+isolating worktree executable-bit differences. Source verification now ignores
+that filesystem metadata for its Git comparison. All pinned-source and content
+checks remain in place. Codex reproduced the failure with independent synthetic
+Git fixtures; no benchmark scores or model generations informed this fix.
+
 ## 2026-09-06: branch-based Colab setup
 
 The author requested selecting the source branch directly in the notebook.
@@ -118,11 +138,12 @@ outputs or empirical conclusions. These reviews remain required. No performance
 finding is attributed to the author in advance. No LASR application answers were
 written or reviewed as part of this project.
 
-No API generation has been executed for this project at this stage. Model IDs,
-an explicit monetary cap, account/data-use confirmation and live opt-in are still
-needed for the empirical milestones. Keys must remain local and must never be
-copied into decision records. A public push/release requires separate explicit
-authorization.
+No API generation has been executed for this project at this stage. Explicit model
+IDs, an authorized execution budget, account/data-use confirmation and live opt-in
+are still needed for the empirical milestones. The Qwen amendment below uses GPU
+hours; the Anthropic path retains its explicit monetary cap. Keys must remain local
+and must never be copied into decision records. A public push/release requires
+separate explicit authorization.
 
 ## Local verification environment
 
@@ -151,3 +172,35 @@ summary keeps its measured generation cost even when its representation cannot b
 accepted. No extra summary is generated merely to repair a failed counter request.
 These changes were prompted by independent synthetic reproductions, not test-set
 monitor scores. Real pilot and author review remain outstanding.
+
+## 2026-09-06: author-authorized Qwen time budget
+
+During guided Colab setup, the author explicitly stated that USD has no limit but
+GPU use has a 12-hour ceiling. For this Qwen path, a cumulative GPU-time allowance
+replaces the previously required positive dollar cap/rate. Pilot, development,
+test and resumes under the same private workspace share 43,200 seconds; separate
+phase directories do not reset the allowance. The notebook starts with one-hour
+managed sessions and defaults to disconnecting as soon as managed accounting is
+saved. Exports and reports run later on CPU so postprocessing does not extend the
+GPU session.
+
+Before the first managed run, the author declares prior GPU setup/idle allocation.
+That debit and the original ceiling persist immutably. Additional observed setup/idle
+periods can be debited explicitly with stable unique usage IDs; repeating the same
+ID and duration does not double-charge the allowance. Each managed session reserves
+its maximum seconds before launch, settles known elapsed time after teardown and
+retains uncertain usage until explicit evidence-based reconciliation. The watchdog
+controls managed process groups only. Platform allocation outside the supervised
+block, including later setup/idle periods, needs these explicit usage entries; this ledger
+does not certify Colab's complete billable allocation or enforce its billing cutoff.
+
+An effective hourly dollar rate is optional. Without one, exported and reported USD
+costs remain null/unavailable; no rate or free-inference claim is invented. Request
+latency and managed GPU-time receipts still record resource use. If supplied, the
+rate estimates money from duration and is not a verified provider invoice.
+
+Codex implemented this execution-budget amendment at the author's request. It does
+not imply review of family grouping, rubric or pilot outputs. The existing private
+data boundaries, explicit live opt-in, development-before-test freeze and null-score
+failure policy remain in effect. No real model inference or empirical scores were
+produced by this amendment.

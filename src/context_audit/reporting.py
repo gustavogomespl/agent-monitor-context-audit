@@ -177,10 +177,14 @@ def _figures(metrics: dict, output: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(10, 5.8))
     colors = dict(zip(CONDITIONS, ("#246b8e", "#dc8644", "#368347", "#9860a0"), strict=True))
+    plotted = 0
+    unknown_costs = []
     for condition, marker in zip(CONDITIONS, ("o", "s", "^", "D"), strict=True):
         group = metrics["conditions"][condition]
         auc = group["auroc"]["estimate"]
-        if auc is not None:
+        if group["cost_usd"] is None:
+            unknown_costs.append(condition)
+        elif auc is not None:
             ax.scatter(
                 group["cost_usd"],
                 auc,
@@ -191,24 +195,33 @@ def _figures(metrics: dict, output: Path) -> None:
                 edgecolors=colors[condition],
                 linewidths=1.5,
             )
+            plotted += 1
     ax.set(
         xlabel="Total recorded execution cost (USD; requests + overhead)",
         ylabel="AUROC on common paired cohort",
         ylim=(-0.03, 1.08),
     )
     ax.margins(x=0.25)
-    if any(metrics["conditions"][c]["auroc"]["estimate"] is not None for c in CONDITIONS):
+    if plotted:
         ax.legend(loc="lower right", fontsize=8)
+    if unknown_costs:
+        ax.text(
+            0.5, 0.5 if not plotted else 0.1,
+            "USD cost unavailable; unpriced conditions are omitted.\n"
+            "Missing prices do not imply free GPU use.",
+            ha="center", va="center", transform=ax.transAxes, fontsize=10,
+        )
     fig.suptitle(
         "Observed cost versus discrimination (coincident points overlap)", fontsize=12, y=0.99
     )
     fig.text(0.5, 0.93, _title(metrics), ha="center", va="top", fontsize=8)
     costs = [
-        f"{c}: costs cover {metrics['conditions'][c]['n_recorded']}/"
-        f"{metrics['conditions'][c]['n_expected']} reference observations"
+        f"{c}: {metrics['conditions'][c]['n_recorded']}/"
+        f"{metrics['conditions'][c]['n_expected']} reference observations recorded; "
+        f"USD unknown for {metrics['conditions'][c]['n_cost_unknown']}"
         for c in CONDITIONS
     ]
-    if metrics["costs"]["contains_upper_bounds"]:
+    if metrics["costs"]["contains_upper_bounds"] and metrics["costs"]["monetary_cost_available"]:
         costs.append("Cost includes conservative upper bounds for calls with unknown billed usage.")
     fig.text(0.02, 0.01, "\n".join(costs), fontsize=8)
     fig.subplots_adjust(top=0.74, bottom=0.26)
@@ -319,13 +332,30 @@ def _report(metrics: dict) -> str:
         lines.append(
             f"| {condition} | {_number(group['realized_token_ratio']['mean'])} | "
             f"{_number(group['representation_tokens']['mean'], 1)} | "
-            f"{group['summary_cost_usd']:.6f} | {group['monitor_cost_usd']:.6f} | "
-            f"{group['infrastructure_cost_usd']:.6f} | "
-            f"{group['cost_usd']:.6f} | {_number(group['latency_seconds']['mean'])} |"
+            f"{_number(group['summary_cost_usd'], 6)} | "
+            f"{_number(group['monitor_cost_usd'], 6)} | "
+            f"{_number(group['infrastructure_cost_usd'], 6)} | "
+            f"{_number(group['cost_usd'], 6)} | {_number(group['latency_seconds']['mean'])} |"
         )
+    recorded_cost = metrics["costs"]["recorded_generation_cost_usd"]
+    cost_text = "unavailable" if recorded_cost is None else f"${recorded_cost:.6f}"
+    if not metrics["costs"]["monetary_cost_available"]:
+        uncertainty = (
+            "USD prices are unavailable for "
+            f"{metrics['costs']['n_cost_unknown']} recorded rows; for the unpriced Qwen path, "
+            "no GPU hourly rate was supplied. GPU use is not treated as free. "
+            "The private GPU time ledger records the managed time budget separately."
+        )
+    elif metrics["costs"]["contains_upper_bounds"]:
+        uncertainty = (
+            "the total includes conservative reserved upper bounds for calls whose billed "
+            "usage was unavailable; it is not an exact invoice amount."
+        )
+    else:
+        uncertainty = "recorded costs are settled; GPU values remain hourly-rate estimates."
     lines += [
         "",
-        f"Recorded execution cost: ${metrics['costs']['recorded_generation_cost_usd']:.6f}. "
+        f"Recorded execution cost: {cost_text}. "
         "Cached offline reanalysis makes no API calls and adds $0 in generation cost. "
         "Recorded costs include attributed calls, retries and any managed GPU overhead; "
         "they do not estimate a "
@@ -335,13 +365,7 @@ def _report(metrics: dict) -> str:
         "allocation is a reporting convention, not a causal per-condition measurement. "
         "Row latency is cumulative summary plus monitor call time, not wall-clock throughput.",
         "",
-        "Cost uncertainty: "
-        + (
-            "the total includes conservative reserved upper bounds for calls whose billed "
-            "usage was unavailable; it is not an exact invoice amount."
-            if metrics["costs"]["contains_upper_bounds"]
-            else "recorded costs are settled; GPU values remain hourly-rate estimates."
-        ),
+        "Cost uncertainty: " + uncertainty,
         "",
         "## Qualitative review",
         "",

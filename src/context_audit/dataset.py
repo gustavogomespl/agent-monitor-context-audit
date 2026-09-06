@@ -260,8 +260,14 @@ def _verified_source_commit(upstream: Path) -> str:
     ).strip()
     if remote.removesuffix(".git") != DATASET_REPOSITORY.removesuffix(".git"):
         raise DatasetError("Source remote is not the official benchmark repository")
+    # Mounted filesystems can change executable bits. These sources are data;
+    # compare tracked content while keeping HEAD, origin and payload checks.
     pristine = subprocess.run(
-        ["git", "-C", str(upstream), "diff", "--quiet", "HEAD", "--"], check=False
+        [
+            "git", "-C", str(upstream), "-c", "core.fileMode=false",
+            "diff", "--quiet", "HEAD", "--",
+        ],
+        check=False,
     )
     if pristine.returncode:
         raise DatasetError("Tracked official source files changed after acquisition")

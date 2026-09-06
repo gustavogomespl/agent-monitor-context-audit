@@ -46,7 +46,10 @@ def response_body():
     }
 
 
-def setup_provider(tmp_path, monkeypatch, *, body=None, handler=None, config=None, **kwargs):
+def setup_provider(
+    tmp_path, monkeypatch, *, body=None, handler=None, config=None,
+    ledger_unit="usd", ledger_limit=1, **kwargs,
+):
     assert importlib.util.find_spec("context_audit.qwen_provider") is not None, (
         "The local Qwen provider is not implemented"
     )
@@ -85,7 +88,7 @@ def setup_provider(tmp_path, monkeypatch, *, body=None, handler=None, config=Non
 
     monkeypatch.setattr(module.httpx, "Client", client)
     store = PrivateStore(tmp_path)
-    ledger = BudgetLedger(store, 1)
+    ledger = BudgetLedger(store, ledger_limit, unit=ledger_unit)
     provider = module.QwenProvider(
         store, ledger, config, timeout=30, canaries=["independent-source-notice"], **kwargs
     )

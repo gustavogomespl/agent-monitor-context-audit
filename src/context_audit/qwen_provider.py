@@ -40,6 +40,8 @@ class QwenProvider:
     ):
         self.config = QwenConfig.model_validate(config.model_dump())
         self.config.validate_live()
+        if ledger.unit == "usd" and self.config.gpu_hourly_rate_usd is None:
+            raise ValueError("Dollar accounting requires an explicit GPU hourly rate")
         if not math.isfinite(timeout) or timeout <= 0 or not _integer(max_calls, minimum=1):
             raise ValueError("Positive finite timeout and maximum generation calls required")
         self.store, self.ledger = store, ledger
@@ -50,6 +52,8 @@ class QwenProvider:
             "provider": "qwen_local", "config": self.config.model_dump(),
             "template": TEMPLATE, "provider_contract": "qwen-local-v1",
         }
+        if ledger.unit == "seconds":
+            self.provenance["accounting_unit"] = "seconds"
         self.counter_method = (
             f"vllm.tokenize/exact-body-and-chat/v1; vllm={self.version}; "
             f"model={MODEL}; revision={self.config.model_revision}; "
@@ -161,9 +165,22 @@ class QwenProvider:
     def _record(self, status: str, **fields) -> dict:
         return {
             "status": status, "text": "", "model": MODEL, "usage": {},
-            "cost_usd": 0, "cost_is_upper_bound": False, "latency_seconds": 0,
-            "cost_method": "generation_elapsed_seconds_times_supplied_gpu_hourly_rate",
+            **self._accounting(0), "cost_is_upper_bound": False, "latency_seconds": 0,
+            "cost_method": (
+                "generation_elapsed_seconds_times_supplied_gpu_hourly_rate"
+                if self.config.gpu_hourly_rate_usd is not None
+                else "unpriced_gpu_time; no_USD_cost_inferred"
+            ),
             "at": utc_now(), "canaries": self.canaries, **fields,
+        }
+
+    def _accounting(self, seconds: float) -> dict:
+        rate = self.config.gpu_hourly_rate_usd
+        cost = seconds * rate / 3600 if rate is not None else None
+        return {
+            "cost_usd": cost, "gpu_seconds": seconds,
+            "accounting_unit": self.ledger.unit,
+            "accounting_amount": seconds if self.ledger.unit == "seconds" else cost,
         }
 
     @staticmethod
@@ -248,11 +265,16 @@ class QwenProvider:
                 key in self.ledger.amounts and key not in self.ledger.settled
                 and not cached.get("cost_is_upper_bound", True)
             ):
-                self.ledger.settle(key, cached["cost_usd"])
+                self.ledger.settle(key, cached.get("accounting_amount", cached["cost_usd"]))
             return key, cached
         if key in self.ledger.amounts:
+            reserved = self.ledger.amounts[key]
+            seconds = (
+                reserved if self.ledger.unit == "seconds"
+                else reserved * 3600 / self.config.gpu_hourly_rate_usd
+            )
             return key, self._record(
-                "api_error", cost_usd=self.ledger.amounts[key], cost_is_upper_bound=True,
+                "api_error", **self._accounting(seconds), cost_is_upper_bound=True,
                 error="uncertain_previous_request",
             )
         if len(self.ledger.amounts) >= self.max_calls:
@@ -265,14 +287,15 @@ class QwenProvider:
             return key, record
         if count + max_tokens > min(context_window, self.config.max_model_len):
             return key, self._record("context_limit", estimated_input_tokens=count)
-        reserve = self.timeout * self.config.gpu_hourly_rate_usd / 3600
+        reservation = self._accounting(self.timeout)
         try:
-            self.ledger.reserve(key, reserve)
+            self.ledger.reserve(key, reservation["accounting_amount"])
         except ValueError:
-            return key, self._record("budget_violation", error="financial_cap")
+            error = "gpu_time_cap" if self.ledger.unit == "seconds" else "financial_cap"
+            return key, self._record("budget_violation", error=error)
         self.store.put("requests", key, {**payload, "canaries": self.canaries, "at": utc_now()})
         started = time.monotonic()
-        record = self._record("api_error", cost_usd=reserve, cost_is_upper_bound=True)
+        record = self._record("api_error", **reservation, cost_is_upper_bound=True)
         try:
             response = self.client.post("/v1/chat/completions", json=request)
         except httpx.HTTPError as exc:
@@ -282,7 +305,7 @@ class QwenProvider:
             return key, record
         elapsed = time.monotonic() - started
         record.update(
-            latency_seconds=elapsed, cost_usd=elapsed * self.config.gpu_hourly_rate_usd / 3600,
+            latency_seconds=elapsed, **self._accounting(elapsed),
             cost_is_upper_bound=False,
         )
         if response.is_success:
@@ -294,5 +317,5 @@ class QwenProvider:
             record.update(status="api_error", error="http_error", http_status=response.status_code)
         # Crash between save and settlement recovers the same response without generation.
         self.store.put("calls", key, record)
-        self.ledger.settle(key, record["cost_usd"])
+        self.ledger.settle(key, record["accounting_amount"])
         return key, record

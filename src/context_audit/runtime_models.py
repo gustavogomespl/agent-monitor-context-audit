@@ -58,7 +58,7 @@ class MonitorResult(StrictModel):
     representation_hash: str = ""
     usage: dict = Field(default_factory=dict)
     latency_seconds: float = Field(default=0, ge=0)
-    cost_usd: float = Field(default=0, ge=0)
+    cost_usd: float | None = Field(default=0, ge=0)
     call_keys: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -80,6 +80,7 @@ class QwenConfig(StrictModel):
     base_url: str = "http://127.0.0.1:8000"
     max_model_len: int = Field(default=65536, ge=2048, le=262144)
     gpu_hourly_rate_usd: float | None = Field(default=None, gt=0)
+    gpu_budget_hours: float | None = Field(default=None, gt=0)
     gpu_memory_utilization: float = Field(default=0.90, gt=0, le=0.95)
     max_num_batched_tokens: int = Field(default=4096, ge=512)
     dtype: Literal["bfloat16"] = "bfloat16"
@@ -108,9 +109,11 @@ class QwenConfig(StrictModel):
         return value.rstrip("/")
 
     def validate_live(self) -> None:
-        if not self.model_revision or self.gpu_hourly_rate_usd is None:
+        if not self.model_revision or (
+            self.gpu_hourly_rate_usd is None and self.gpu_budget_hours is None
+        ):
             raise ValueError(
-                "Qwen requires an immutable model revision and explicit GPU hourly rate"
+                "Qwen requires an immutable model revision and explicit GPU time budget or rate"
             )
 
 

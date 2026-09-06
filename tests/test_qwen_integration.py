@@ -94,7 +94,8 @@ def test_private_run_path_accepts_ignored_drive_symlink(tmp_path, monkeypatch):
         require_private_path(Path("elsewhere/private"), Path("runs/private"))
 
 
-def test_qwen_runner_four_conditions_retries_and_resume_over_http(tmp_path, monkeypatch):
+@pytest.mark.parametrize("time_only", [False, True])
+def test_qwen_runner_four_conditions_retries_and_resume_over_http(tmp_path, monkeypatch, time_only):
     import httpx
     import pandas as pd
 
@@ -106,7 +107,11 @@ def test_qwen_runner_four_conditions_retries_and_resume_over_http(tmp_path, monk
     model = "Qwen/Qwen3.8-27B"
     cfg = AuditConfig(
         provider="qwen_local",
-        qwen=QwenConfig(model_revision="a" * 40, gpu_hourly_rate_usd=2),
+        qwen=QwenConfig(
+            model_revision="a" * 40,
+            gpu_hourly_rate_usd=None if time_only else 2,
+            gpu_budget_hours=12 if time_only else None,
+        ),
         monitor_model=model,
         summarizer_model=model,
         pilot_pairs=None,
@@ -214,7 +219,7 @@ def test_qwen_runner_four_conditions_retries_and_resume_over_http(tmp_path, monk
         labels,
         {"dataset_commit": "1" * 40},
         {"code_hash": "code", "prompts": {}},
-        2,
+        None if time_only else 2,
         ["Independent synthetic notice"],
         {},
         {},
@@ -223,6 +228,13 @@ def test_qwen_runner_four_conditions_retries_and_resume_over_http(tmp_path, monk
     assert first["successful_rows"] == first["expected_rows"] == 16
     assert len(generated) == 25  # Four monitor + two summary calls, two repeats, one repair.
     scores = pd.read_csv(Path(cfg.run_dir) / "scores.csv")
+    if time_only:
+        assert first["conservative_committed_usd"] is None
+        assert first["conservative_request_seconds"] > 0
+        assert scores[[
+            "summary_cost_usd", "monitor_cost_usd", "infrastructure_cost_usd", "cost_usd",
+        ]].isna().all().all()
+        assert scores.latency_seconds.sum() == pytest.approx(first["conservative_request_seconds"])
     second = runner._run_locked(*args)
     assert second["generation_requests"] == first["generation_requests"]
     assert len(generated) == 25

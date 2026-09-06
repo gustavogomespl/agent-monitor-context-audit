@@ -80,13 +80,17 @@ def load_prices(path: Path, models: list[str]) -> tuple[dict[str, Price], dict]:
 class BudgetLedger:
     """Each request is reserved before network I/O. Uncertain charges stay reserved."""
 
-    def __init__(self, store: PrivateStore, limit: float):
-        if not math.isfinite(limit) or limit <= 0:
-            raise ValueError("Explicit positive finite dollar budget required")
+    def __init__(self, store: PrivateStore, limit: float, *, unit: str = "usd"):
+        if unit not in ("usd", "seconds"):
+            raise ValueError("Budget unit must be usd or seconds")
+        if not isinstance(limit, (int, float)) or not math.isfinite(limit) or limit <= 0:
+            raise ValueError(f"Explicit positive finite {unit} budget required")
         self.store, self.limit = store, limit
+        self.unit = unit
+        self.journal = "budget" if unit == "usd" else "budget-seconds"
         self.amounts: dict[str, float] = {}
         self.settled: set[str] = set()
-        for entry in store.read_journal("budget"):
+        for entry in store.read_journal(self.journal):
             key = entry["call_id"]
             if entry["action"] == "reserve":
                 if key in self.amounts:
@@ -110,7 +114,7 @@ class BudgetLedger:
         if amount < 0 or not math.isfinite(amount) or self.committed + amount > self.limit:
             raise ValueError("Insufficient remaining budget for a conservative request reservation")
         self.store.append(
-            "budget", dict(action="reserve", call_id=call_id, amount=amount, at=utc_now())
+            self.journal, dict(action="reserve", call_id=call_id, amount=amount, at=utc_now())
         )
         self.amounts[call_id] = amount
 
@@ -118,13 +122,13 @@ class BudgetLedger:
         if call_id not in self.amounts or actual < 0 or not math.isfinite(actual):
             raise ValueError("Invalid settled charge")
         self.store.append(
-            "budget", dict(action="settle", call_id=call_id, amount=actual, at=utc_now())
+            self.journal, dict(action="settle", call_id=call_id, amount=actual, at=utc_now())
         )
         self.amounts[call_id] = actual
         self.settled.add(call_id)
         if self.committed > self.limit + 1e-12:
             raise ValueError(
-                "Actual provider usage exceeded reservation; stop and reconcile pricing"
+                "Actual provider usage exceeded reservation; stop and reconcile accounting"
             )
 
 

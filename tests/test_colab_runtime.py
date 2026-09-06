@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -122,14 +123,26 @@ def simulated_lifecycle(tmp_path, monkeypatch):
         launched=[], stopped=[], health_requests=[], barrier_read_fds=[],
     )
     config = qwen_config(
-        run_dir=str(tmp_path), data_use_confirmed=True, rubric_reviewed=True,
+        run_dir=str(tmp_path / "qwen-pilot"), data_use_confirmed=True, rubric_reviewed=True,
     )
     config.qwen.gpu_hourly_rate_usd = 3.6
-    store = PrivateStore(tmp_path / "gpu_sessions")
+    store = PrivateStore(Path(config.run_dir) / "gpu_sessions")
+
+    def current_ledger():
+        if config.qwen.gpu_budget_hours is not None:
+            return BudgetLedger(
+                PrivateStore(Path(config.run_dir).parent / "gpu_budget"),
+                config.qwen.gpu_budget_hours * 3600, unit="seconds",
+            )
+        return BudgetLedger(store, 1)
 
     def launch(command, **kwargs):
-        ledger = BudgetLedger(store, 1)
-        assert ledger.committed == pytest.approx(0.06) and not ledger.settled
+        ledger = current_ledger()
+        if config.qwen.gpu_budget_hours is None:
+            assert ledger.committed == pytest.approx(0.06) and not ledger.settled
+        else:
+            assert "synthetic_session" in ledger.amounts
+            assert "synthetic_session" not in ledger.settled
         assert kwargs["start_new_session"] is True
         if colab._LAUNCH_BARRIER in command:
             state.barrier_read_fds.append(os.dup(kwargs["pass_fds"][0]))
@@ -153,7 +166,7 @@ def simulated_lifecycle(tmp_path, monkeypatch):
     def stop(process):
         if process is None:
             return
-        assert not BudgetLedger(store, 1).settled
+        assert "synthetic_session" not in current_ledger().settled
         state.stopped.append(process.name)
         if process.name == "server" and state.cleanup_failure:
             raise OSError("Independent synthetic shutdown uncertainty")
@@ -319,3 +332,47 @@ def test_failed_child_registration_closes_release_pipe_without_executing(tmp_pat
             start_new_session=True,
         )
     assert len(stopped) == 1 and not marker.exists()
+
+
+def test_time_only_session_settles_elapsed_and_keeps_usd_unknown(simulated_lifecycle):
+    colab, config, store, state = simulated_lifecycle
+    config.qwen.gpu_budget_hours = 12
+    config.qwen.gpu_hourly_rate_usd = None
+    result = colab._run_managed(config, None, 60, 30, {"name": "synthetic GPU"})
+    assert result["status"] == "executed"
+    receipt = result["gpu_costs"]
+    assert receipt["managed_session_seconds"] == 9
+    assert receipt["managed_session_cost_usd"] is None
+    assert receipt["cumulative_gpu_seconds"] == 9
+    assert receipt["remaining_gpu_seconds"] == 43200 - 9
+    assert not store.path("budget").exists()
+
+
+def test_cumulative_remaining_time_caps_session_and_stops_worker(simulated_lifecycle):
+    colab, config, store, state = simulated_lifecycle
+    config.qwen.gpu_budget_hours = 12
+    config.qwen.gpu_hourly_rate_usd = None
+    colab.initialize_gpu_budget(config.run_dir, 12, previously_used_seconds=43150)
+    state.worker_exit = None
+    result = colab._run_managed(config, None, 3600, 30, {"name": "synthetic GPU"})
+    assert result["status"] == "partial_or_failed"
+    assert store.get("sessions", "synthetic_session")["deadline_epoch"] == 1150
+    assert result["gpu_costs"]["cumulative_gpu_seconds"] <= 43200
+    assert state.stopped == ["worker", "server", "watchdog"]
+    launched = list(state.launched)
+    with pytest.raises(ValueError, match="insufficient remaining time"):
+        colab._run_managed(config, None, 3600, 30, {"name": "synthetic GPU"})
+    assert state.launched == launched
+
+
+def test_lost_time_only_session_blocks_other_phase_until_reconciled(simulated_lifecycle):
+    colab, config, store, state = simulated_lifecycle
+    config.qwen.gpu_budget_hours = 12
+    config.qwen.gpu_hourly_rate_usd = None
+    state.cleanup_failure = True
+    with pytest.raises(OSError, match="shutdown uncertainty"):
+        colab._run_managed(config, None, 60, 30, {"name": "synthetic GPU"})
+    config.run_dir = str(store.root.parent.parent / "next-phase")
+    with pytest.raises(ValueError, match="Reconcile"):
+        colab._run_managed(config, None, 60, 30, {"name": "synthetic GPU"})
+    assert state.launched == ["watchdog", "server", "worker"]

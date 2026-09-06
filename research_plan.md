@@ -10,6 +10,19 @@
 > policy and development-before-test freeze remain unchanged. See
 > [the implementation contract](docs/plans/qwen-colab.md) and
 > [the operating protocol](docs/qwen_colab.md). No real inference has been run.
+> **Hardware follow-up:** guided setup supplied an RTX PRO 6000 Blackwell with
+> 96 GB instead of H100. The implementation accepts one GPU meeting the VRAM
+> and native BF16 requirements and records the actual hardware. A small BF16
+> diagnostic passed; model startup and generation remain pilot checks.
+> **Budget follow-up — 2026-09-06:** the author explicitly set no USD limit and a
+> ceiling of 12 GPU hours. For Qwen, a shared cumulative time ledger replaces the
+> mandatory dollar cap across pilot, development, test and resumptions. It records
+> managed startup through teardown and declared prior GPU allocation. Allocation
+> outside the managed block needs separate accounting; the supervisor cannot
+> certify Colab's total billable allocation. An hourly dollar estimate is optional;
+> unknown monetary costs remain unavailable. Data-use/rubric review and explicit
+> live opt-in remain required. This budget amendment is not scientific review or
+> evidence of a completed model experiment.
 
 ## Plano de pesquisa e implementação para o Codex
 

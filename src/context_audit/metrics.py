@@ -54,6 +54,9 @@ NUMERIC_COLUMNS = (
     "cost_usd",
     "latency_seconds",
 )
+COST_COLUMNS = (
+    "summary_cost_usd", "monitor_cost_usd", "infrastructure_cost_usd", "cost_usd"
+)
 
 
 def validate_rows(
@@ -68,9 +71,13 @@ def validate_rows(
         raise ValueError(f"Unexpected public result columns: {sorted(unknown)}")
     if frame.empty:
         return pd.DataFrame(columns=PUBLIC_COLUMNS)
-    # Legacy API rows have no separately billed infrastructure overhead.
+    # Legacy priced API rows have no separately billed infrastructure overhead.
+    # An absent rate is not evidence that GPU time was free.
     if "infrastructure_cost_usd" not in frame:
-        frame["infrastructure_cost_usd"] = 0.0
+        legacy_costs = [column for column in COST_COLUMNS if column in frame]
+        frame["infrastructure_cost_usd"] = np.where(
+            frame[legacy_costs].notna().all(axis=1), 0.0, np.nan
+        )
     missing = set(PUBLIC_COLUMNS) - set(frame.columns)
     if missing:
         raise ValueError(f"Missing numeric result columns: {sorted(missing)}")
@@ -89,13 +96,22 @@ def validate_rows(
         raise ValueError("Labels must be binary")
     if not ((frame["repetition"] >= 0) & (frame["repetition"] % 1 == 0)).all():
         raise ValueError("Repetition identities must be nonnegative integers")
-    if not np.isfinite(frame[list(NUMERIC_COLUMNS)].to_numpy(dtype=float)).all():
-        raise ValueError("Token, latency and cost measurements must be finite")
+    measured_columns = [column for column in NUMERIC_COLUMNS if column not in COST_COLUMNS]
+    if not np.isfinite(frame[measured_columns].to_numpy(dtype=float)).all():
+        raise ValueError("Token and latency measurements must be finite")
+    costs = frame[list(COST_COLUMNS)]
+    known_costs = costs.notna().all(axis=1)
+    if not (known_costs | costs.isna().all(axis=1)).all():
+        raise ValueError("Row cost components must be all known or all unknown")
+    if not np.isfinite(costs.loc[known_costs].to_numpy(dtype=float)).all():
+        raise ValueError("Known cost measurements must be finite")
     if (frame[list(NUMERIC_COLUMNS)] < 0).any().any():
         raise ValueError("Token, latency and cost measurements cannot be negative")
     if not np.allclose(
-        frame["cost_usd"],
-        frame["summary_cost_usd"] + frame["monitor_cost_usd"] + frame["infrastructure_cost_usd"],
+        costs.loc[known_costs, "cost_usd"],
+        costs.loc[known_costs, "summary_cost_usd"]
+        + costs.loc[known_costs, "monitor_cost_usd"]
+        + costs.loc[known_costs, "infrastructure_cost_usd"],
         rtol=1e-7,
         atol=1e-10,
     ):
@@ -184,6 +200,17 @@ def _distribution(series: pd.Series) -> dict:
         "min": float(values.min()) if len(values) else None,
         "max": float(values.max()) if len(values) else None,
     }
+
+
+def _cost_total(series: pd.Series) -> float | None:
+    """A partial known subtotal cannot stand in for an unknown execution total."""
+    return None if series.isna().any() else float(series.sum())
+
+
+def _upper_bound_cost(frame: pd.DataFrame) -> float | None:
+    if frame["cost_usd"].isna().any():
+        return None
+    return _cost_total(frame.loc[frame["cost_is_upper_bound"], "cost_usd"])
 
 
 def _complete_pairs(frame: pd.DataFrame) -> pd.DataFrame:
@@ -296,9 +323,8 @@ def report_metrics(
             "n_missing": n_expected - len(group),
             "n_valid": len(valid),
             "n_cost_upper_bound": int(group["cost_is_upper_bound"].sum()),
-            "upper_bound_cost_usd": float(
-                group.loc[group["cost_is_upper_bound"], "cost_usd"].sum()
-            ),
+            "upper_bound_cost_usd": _upper_bound_cost(group),
+            "n_cost_unknown": int(group["cost_usd"].isna().sum()),
             "coverage": len(valid) / n_expected,
             "failure_rate_recorded": 1 - len(valid) / len(group) if len(group) else None,
             "failures": {
@@ -316,7 +342,8 @@ def report_metrics(
             "representation_tokens": _distribution(valid["representation_tokens"]),
             "latency_seconds": _distribution(group["latency_seconds"]),
             **{
-                column: float(group[column].sum())
+                column: _cost_total(group[column])
+                if column in COST_COLUMNS else float(group[column].sum())
                 for column in NUMERIC_COLUMNS
                 if (
                     column.endswith("cost_usd")
@@ -385,16 +412,18 @@ def report_metrics(
         "paired_discordances": discordances,
         "minimum_unique_false_positive_step": 1 / n_unique_negative if n_unique_negative else None,
         "costs": {
-            "recorded_generation_cost_usd": float(frame["cost_usd"].sum()),
+            "recorded_generation_cost_usd": _cost_total(frame["cost_usd"]),
+            "monetary_cost_available": bool(frame["cost_usd"].notna().all()),
+            "n_cost_unknown": int(frame["cost_usd"].isna().sum()),
             "contains_upper_bounds": bool(frame["cost_is_upper_bound"].any()),
-            "upper_bound_cost_usd": float(
-                frame.loc[frame["cost_is_upper_bound"], "cost_usd"].sum()
-            ),
+            "upper_bound_cost_usd": _upper_bound_cost(frame),
             "hypothetical_cache_free_cost_usd": None,
             "cached_offline_reanalysis_api_cost_usd": 0.0,
             "note": "Recorded cost includes summary, monitor, retries and infrastructure; "
             "GPU values are supplied-hourly-rate estimates, not invoices or causal "
-            "per-condition costs. No hypothetical cache-free rerun is estimated.",
+            "per-condition costs. Null USD costs mean the monetary price is unavailable, "
+            "not free GPU use; totals remain null if any constituent price is unknown. "
+            "No hypothetical cache-free rerun is estimated.",
         },
         "limitations": [
             "Fixed monitor and summarizer; benchmark scenarios do not establish production safety.",

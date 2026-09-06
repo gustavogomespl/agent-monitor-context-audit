@@ -12,22 +12,29 @@ directional hypothesis that structured summaries improve AUROC is untested.
 The full scope is in the user-supplied [research plan](research_plan.md), and
 current empirical status is in [findings](reports/findings.md).
 
-## Qwen on a Colab H100
+## Qwen on a Colab GPU
 
 The Qwen workflow is in [03_qwen_colab.ipynb](notebooks/03_qwen_colab.ipynb), with
-[setup, cost and recovery instructions](docs/qwen_colab.md). Upload the notebook
+[setup, GPU-time and recovery instructions](docs/qwen_colab.md). Upload the notebook
 to Colab, select `BRANCH` (default `pilot`) and enable `RUN_SETUP`. Setup clones
 this repository and saves the branch's exact commit for subsequent sessions.
 The companion `dist/qwen-colab-bundle.zip` remains an optional source transfer.
 It uses one pinned `Qwen/Qwen3.8-27B` in BF16 for
 both roles, exact tokenizer counts, thinking disabled and persistent private
-Drive storage. Each phase requires explicit opt-in, a positive GPU rate/cap and
-data-use/rubric confirmation. Default Run All is inert. Actual H100 and model
+Drive storage. The author set a shared **12 GPU-hour cap, without a USD cap**;
+pilot, development, test and resumptions use the same time allowance. Declare
+prior setup/idle GPU allocation before the first live run. Each phase retains
+explicit opt-in and data-use/rubric confirmation. A dollar rate is optional; absent
+rates produce unavailable USD costs. H100 and RTX PRO 6000 Blackwell meet the hardware
+gate (one GPU, >=75,000 MiB VRAM, native BF16). Default Run All is inert. Model
 performance validation remains pending a real pilot.
 
 The local CPU environment remains lightweight; vLLM/CUDA are installed only in
 the explicit Colab setup. The Anthropic workflow below remains available as a
 separate backend; one run never mixes providers.
+The supervisor measures managed runtime plus declared prior use. Colab allocation
+outside its block requires explicit prior/additional usage entries; normal
+completion disconnects after saving private records. Export and analyze later on CPU.
 
 ## Local setup and offline checks
 

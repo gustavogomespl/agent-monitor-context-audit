@@ -311,7 +311,7 @@ def main(argv=None) -> int:
     run = sub.add_parser("run", help="Real live evaluation (never automatic on notebook open)")
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--live", action="store_true", help="Explicit paid-generation opt-in")
-    run.add_argument("--max-cost-usd", type=float, required=True)
+    run.add_argument("--max-cost-usd", type=float, default=None)
     frozen = sub.add_parser("freeze", help="Prepare protocol freeze after reviewed development")
     frozen.add_argument("--config", type=Path, default=Path("configs/main.yaml"))
     frozen.add_argument("--development-run", type=Path, required=True)
@@ -346,12 +346,13 @@ def main(argv=None) -> int:
             )
         elif args.command == "run":
             from context_audit.dataset import load_canaries, load_dataset
-            from context_audit.runner import load_config, run_experiment
+            from context_audit.runner import load_config, run_experiment, validate_run_budget
 
-            if not args.live or not math.isfinite(args.max_cost_usd) or args.max_cost_usd <= 0:
-                raise ValueError("Live run requires --live and a positive finite --max-cost-usd")
+            if not args.live:
+                raise ValueError("Live run requires --live")
             load_dotenv(override=False)
             config = load_config(args.config)
+            validate_run_budget(config, args.max_cost_usd)
             if config.provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
                 raise ValueError("ANTHROPIC_API_KEY is missing; no paid call was made")
             inputs, labels = load_dataset(Path(config.dataset_dir), config.split)

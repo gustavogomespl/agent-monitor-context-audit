@@ -2,10 +2,19 @@
 
 **Qwen/Colab amendment (2026-09-06):** the author-requested Qwen execution path
 uses the same experimental comparison described here, with exact Qwen tokenizer
-counts and a managed H100 runtime. Model/runtime pins, non-thinking sampling,
+counts and a managed GPU runtime with native BF16 and sufficient VRAM. The
+original H100 and the author's observed RTX PRO 6000 Blackwell are eligible;
+actual hardware is recorded per session. Model/runtime pins, non-thinking sampling,
 cost attribution, process cleanup and recovery are specified in
 [Qwen Colab](qwen_colab.md). Commercial API-specific details below describe the
 retained Anthropic backend. No empirical model results exist for either path.
+The author subsequently set a cumulative 12 GPU-hour ceiling with no USD limit.
+Qwen therefore uses a shared time ledger across phases and resumptions, including
+managed startup/teardown and declared prior GPU allocation. Unobserved platform
+allocation outside managed execution is not silently treated as measured time.
+An optional supplied hourly rate converts measured time into estimated USD;
+without a rate, monetary costs are unavailable and resource use is reported in
+seconds. This operational amendment does not alter the scientific comparison.
 
 **Status:** implementation protocol; empirical pilot and test results do not yet
 exist. The user-supplied [research plan](../research_plan.md) defines the scope.

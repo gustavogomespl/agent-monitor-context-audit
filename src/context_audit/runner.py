@@ -6,6 +6,7 @@ import csv
 import fcntl
 import hashlib
 import json
+import math
 import os
 import random
 import subprocess
@@ -42,6 +43,28 @@ from context_audit.storage import PrivateStore, digest
 
 def load_config(path: Path) -> AuditConfig:
     return AuditConfig.model_validate(yaml.safe_load(path.read_text()))
+
+
+def validate_run_budget(config: AuditConfig, max_cost_usd: float | None) -> None:
+    """Unlimited USD is an explicit Qwen time-budget mode, never an invalid number."""
+    if max_cost_usd is None:
+        if config.provider != "qwen_local" or config.qwen.gpu_budget_hours is None:
+            raise ValueError("Omitting --max-cost-usd requires an explicit Qwen GPU time budget")
+    elif not math.isfinite(max_cost_usd) or max_cost_usd <= 0:
+        raise ValueError("--max-cost-usd must be positive and finite when supplied")
+    if config.provider == "qwen_local":
+        config.qwen.validate_live()
+        if max_cost_usd is not None and config.qwen.gpu_hourly_rate_usd is None:
+            raise ValueError("A dollar cap requires an explicit GPU hourly rate")
+
+
+def _cost_sum(calls: list[dict]) -> float | None:
+    values = [call.get("cost_usd", 0) for call in calls]
+    return None if any(value is None for value in values) else sum(values)
+
+
+def _unpriced(config: AuditConfig) -> bool:
+    return config.provider == "qwen_local" and config.qwen.gpu_hourly_rate_usd is None
 
 
 def prompts(config: AuditConfig) -> dict[str, str]:
@@ -142,6 +165,7 @@ def make_representation(
                 repair = "The previous request failed to produce a complete valid response."
             if status in ("refusal", "context_limit") or call.get("error") in (
                 "financial_cap",
+                "gpu_time_cap",
                 "maximum_generation_calls",
                 "uncertain_previous_request",
             ):
@@ -183,7 +207,9 @@ def monitor_representation(
         representation_hash=representation.content_hash,
     )
     if representation.status != "ok":
-        return MonitorResult(status=representation.status, **base), []
+        return MonitorResult(
+            status=representation.status, cost_usd=None if _unpriced(config) else 0, **base,
+        ), []
     request = build_monitor_prompt(transcript, representation.text)
     visible = evidence_ids(representation.text) & {event.event_id for event in transcript.events}
     calls, keys, status, decision = [], [], "invalid_output", None
@@ -236,7 +262,7 @@ def monitor_representation(
         call_keys=keys,
         usage=usage,
         latency_seconds=sum(c.get("latency_seconds", 0) for c in calls),
-        cost_usd=sum(c.get("cost_usd", 0) for c in calls),
+        cost_usd=None if _unpriced(config) else _cost_sum(calls),
     )
     return result, calls
 
@@ -297,6 +323,7 @@ def _model_window(info: dict, configured: int | None, output: int) -> int:
 
 def _public_row(transcript, label, rep, result, summary_calls, monitor_calls, config, repetition):
     calls = summary_calls + monitor_calls
+    unpriced = _unpriced(config)
     return dict(
         transcript_id=transcript.transcript_id,
         scenario_id=label.scenario_id,
@@ -320,10 +347,10 @@ def _public_row(transcript, label, rep, result, summary_calls, monitor_calls, co
                 "cache_creation_input_tokens",
             )
         },
-        summary_cost_usd=sum(c.get("cost_usd", 0) for c in summary_calls),
-        monitor_cost_usd=result.cost_usd,
-        infrastructure_cost_usd=0.0,
-        cost_usd=sum(c.get("cost_usd", 0) for c in calls),
+        summary_cost_usd=None if unpriced else _cost_sum(summary_calls),
+        monitor_cost_usd=None if unpriced else result.cost_usd,
+        infrastructure_cost_usd=None if unpriced else 0.0,
+        cost_usd=None if unpriced else _cost_sum(calls),
         latency_seconds=sum(c.get("latency_seconds", 0) for c in calls),
         cost_is_upper_bound=any(c.get("cost_is_upper_bound", False) for c in calls),
         monitor_model=config.monitor_model,
@@ -371,9 +398,10 @@ def run_experiment(
     labels: list[EvaluationLabel],
     dataset_manifest: dict,
     *,
-    max_cost_usd: float,
+    max_cost_usd: float | None,
     canaries: list[str],
 ) -> dict:
+    validate_run_budget(config, max_cost_usd)
     require_private_path(Path(config.run_dir), Path("runs/private"))
     require_private_path(Path(config.dataset_dir), Path("data/private"))
     if not config.data_use_confirmed or not config.rubric_reviewed:
@@ -430,6 +458,12 @@ def run_experiment(
             source="User-supplied effective Colab GPU hourly rate; estimate, not an invoice",
             accounting="Request duration plus separately measured managed-session overhead",
         )
+        if config.qwen.gpu_hourly_rate_usd is None:
+            price_snapshot.update(
+                source="No GPU hourly rate supplied; USD cost unavailable",
+                accounting="Measured GPU seconds; no monetary cost inferred",
+            )
+        price_snapshot["gpu_budget_hours"] = config.qwen.gpu_budget_hours
     else:
         prices, price_snapshot = load_prices(
             Path(config.prices_file), [config.monitor_model, config.summarizer_model]
@@ -460,7 +494,11 @@ def _run_locked(
     price_snapshot,
 ):
     store = PrivateStore(Path(config.run_dir))
-    ledger = BudgetLedger(store, max_cost_usd)
+    validate_run_budget(config, max_cost_usd)
+    ledger = (
+        BudgetLedger(store, config.qwen.gpu_budget_hours * 3600, unit="seconds")
+        if max_cost_usd is None else BudgetLedger(store, max_cost_usd)
+    )
     if config.provider == "qwen_local":
         from context_audit.qwen_provider import QwenProvider
 
@@ -619,7 +657,12 @@ def _run_locked(
         rows=len(rows),
         expected_rows=len(schedule),
         successful_rows=sum(r["status"] == "ok" for r in rows),
-        conservative_committed_usd=ledger.committed,
+        conservative_committed_usd=(
+            ledger.committed if ledger.unit == "usd"
+            else ledger.committed * config.qwen.gpu_hourly_rate_usd / 3600
+            if config.qwen.gpu_hourly_rate_usd is not None else None
+        ),
+        conservative_request_seconds=ledger.committed if ledger.unit == "seconds" else None,
         costs_include_uncertain_upper_bounds=bool(set(ledger.amounts) - ledger.settled),
         generation_requests=len(ledger.amounts),
         data_origin="sleight_bench",
