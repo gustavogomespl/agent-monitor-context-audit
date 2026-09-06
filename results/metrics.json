@@ -1,0 +1,6 @@
+{
+  "status": "experiment_not_executed",
+  "primary": null,
+  "conditions": {},
+  "message": "Experiment not executed; no empirical numeric scores are available."
+}
