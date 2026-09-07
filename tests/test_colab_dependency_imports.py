@@ -104,7 +104,7 @@ def test_other_torch_build_is_not_replaced_by_the_known_cu130_repair(simulated_p
     assert len(commands) == 2 and "pip" not in commands[0]
 
 
-def test_failed_repeat_setup_clears_previous_ready_flag(monkeypatch):
+def test_failed_repeat_setup_clears_previous_ready_flag(monkeypatch, tmp_path):
     import subprocess
     import urllib.request
 
@@ -115,7 +115,7 @@ def test_failed_repeat_setup_clears_previous_ready_flag(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", fail)
     monkeypatch.setattr(urllib.request, "urlopen", fail)
-    ns.update(SETUP_READY=True)
+    ns.update(SETUP_READY=True, DRIVE_ROOT=tmp_path)
     with pytest.raises((RuntimeError, FileNotFoundError)):
         ns["install_runtime"]()
     assert ns["SETUP_READY"] is False

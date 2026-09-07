@@ -9,7 +9,8 @@
 > for this path. The scientific question, four conditions, paired split, failure
 > policy and development-before-test freeze remain unchanged. See
 > [the implementation contract](docs/plans/qwen-colab.md) and
-> [the operating protocol](docs/qwen_colab.md). No real inference has been run.
+> [the operating protocol](docs/qwen_colab.md). No real inference had been run at
+> the time of this infrastructure amendment.
 > **Hardware follow-up:** guided setup supplied an RTX PRO 6000 Blackwell with
 > 96 GB instead of H100. The implementation accepts one GPU meeting the VRAM
 > and native BF16 requirements and records the actual hardware. A small BF16
@@ -23,6 +24,26 @@
 > unknown monetary costs remain unavailable. Data-use/rubric review and explicit
 > live opt-in remain required. This budget amendment is not scientific review or
 > evidence of a completed model experiment.
+
+> **Development amendment — summary-v2 (2026-09-06).** The author subsequently
+> supplied private pilot records and authorized a revision after offline diagnosis
+> of summary length and citation validation failures. For the Qwen path, both
+> summary conditions now target 60–80% of the unchanged per-example token cap
+> (at most 1,024 tokens), superseding the proposed 80–100% target in section 4.2.
+> The one allowed regeneration reinforces all length, format, schema and citation
+> requirements using the original input; it receives neither the rejected response
+> nor validator error text. There are still at most two attempts, with both charged,
+> and persistent failures keep null scores. The four conditions, evidence priorities,
+> validators, monitor policy and development/test split are unchanged.
+> The new pilot evaluates all 24 units afresh in isolated `summary-v2` runs. The
+> existing model/runtime pins, dataset IDs, family split, measured context and shared
+> 12-hour allowance are retained; prior results are not overwritten or reused as
+> new-version responses. Development configs record `development-summary-v2`;
+> the existing reviewed test freeze remains required. Development validation failures
+> motivated this change; held-out scores did not. Codex implemented the amendment
+> at the author's request. Offline checks are not evidence that the revised pilot
+> succeeds or improves monitoring performance. The original proposal below is
+> retained as historical context; this note defines the amended Qwen behavior.
 
 ## Plano de pesquisa e implementação para o Codex
 

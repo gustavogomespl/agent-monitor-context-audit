@@ -2,7 +2,14 @@ Return a valid JSON object with exactly the following five fields, no fences:
 {"environment_and_state": [], "actions_and_observed_results": [],
  "important_identifiers": [], "contradictions_or_missing_information": [],
  "source_event_ids": []}
-The first four fields are arrays of concise strings. Each string must cite its
-visible event IDs, such as [E0003]. Empty arrays are allowed when there is no relevant
-evidence. Keep actions in chronological order. source_event_ids is the deduplicated
-array of exact IDs cited in those strings. Do not include a risk or malice conclusion.
+The first four fields are arrays of concise strings. Each string in ALL first four fields
+must contain its own visible event citation, such as [E0003]. This includes every
+important_identifiers item and every contradictions_or_missing_information item;
+a citation elsewhere or in source_event_ids does not cite an individual string.
+Use short strings, group related facts with their citations and avoid duplicating
+the same fact across fields. Empty arrays are allowed when no relevant evidence
+supports a field; never add uncited placeholders such as "None" or "Unknown".
+Keep actions in chronological order. source_event_ids is the deduplicated array of
+exact IDs cited in those strings. Include all five fields even when arrays are empty.
+Before returning, check the complete JSON, each string's citation, source_event_ids
+and the token ceiling together. Do not include a risk or malice conclusion.

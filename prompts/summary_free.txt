@@ -1,3 +1,6 @@
 Use concise prose paragraphs, with source event citations such as [E0003]. Preserve
 chronology and separate observations, claims, and uncertainty in natural language.
+Attach citations to each material claim, including important identifiers and
+statements about missing information. Combine related facts into short sentences
+with their citations; avoid repeating the same fact or restating the initial task.
 Do not add a title, JSON, a risk assessment or a conclusion about maliciousness.

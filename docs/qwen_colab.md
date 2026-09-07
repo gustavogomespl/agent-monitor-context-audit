@@ -4,14 +4,16 @@
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gustavogomespl/agent-monitor-context-audit/blob/pilot/notebooks/03_qwen_colab.ipynb)
 
-1. Open `notebooks/03_qwen_colab.ipynb` with the badge above, which loads the
-   committed notebook from the `pilot` branch through Colab's GitHub loader, or
-   use **File → Upload notebook**. Push a rebuilt notebook before relying on the badge.
+1. Upload the supplied `dist/qwen_colab_summary_v2_<hash>.ipynb` with
+   **File → Upload notebook**, or upload the rebuilt `notebooks/03_qwen_colab.ipynb`.
+   The badge above loads the committed notebook from `pilot`; it reflects this
+   version only after the rebuilt notebook is published.
 2. Select one eligible GPU runtime with **Runtime → Change runtime type**:
    H100 80GB or RTX PRO 6000 Blackwell 96GB.
 3. Leave **STAGE = pilot** for the first run. Confirm data use and rubric review,
    then check **START_RUN**. Keep the optional workspace name unchanged to resume
-   the existing experiment. The test review checkbox is only needed for test.
+   the existing private data and budget. The notebook selects the new development
+   version automatically. The test review checkbox is only needed for test.
 4. Select **Runtime → Run all** and allow Google Drive access when asked.
 
 The notebook handles the GPU check, source preparation, dependency installation and
@@ -19,6 +21,33 @@ import checks, acquisition/inventory, supervised generation, numeric export and
 reporting. It saves the report to Drive and releases GPU allocation at the end,
 including setup/error paths. Default Run All without confirmed form fields prints
 the unchecked fields and does not mount Drive or execute an experiment.
+
+## Development amendment: summary-v2
+
+The author authorized a new development version after offline diagnosis of saved
+pilot summary failures. Both summary prompts now target 60–80% of the same body
+budget, leaving room for citations and formatting under the unchanged per-example
+cap (at most 1,024 tokens). Both preserve the same evidence priorities. One allowed
+regeneration restates all length, format, schema and citation requirements using
+the original input; neither the rejected candidate nor validator error text is
+fed back. The limit remains two attempts total. No validator is relaxed and no
+oversized summary is silently shortened.
+
+The hidden setting `EXPERIMENT_VERSION = "summary-v2"` selects an isolated source
+checkout at `/content/agent-monitor-context-audit-summary-v2` and new run identities.
+The pilot starts all 24 evaluation units afresh across the same three development
+pairs and four conditions; it does not reuse the previous pilot's successful or
+failed calls. The model/tokenizer/runtime pins, dataset, opaque IDs, family split,
+selected context and cumulative GPU allowance are retained. Existing runs, caches,
+configs and reports remain available for comparison. Later reconnects can resume
+this version's own incremental records.
+
+This amendment was motivated by development validation failures, not held-out
+scores. A first version setup stops if the parent workspace is already frozen or
+contains a test run. Existing data-use/rubric confirmations, explicit start and
+development review before test still apply. The new prompts have only offline
+synthetic validation until the authorized Colab pilot is executed; improved live
+coverage or monitoring performance is not established.
 
 ## What the output looks like
 
@@ -62,16 +91,26 @@ No public push occurs.
 The default private folder is `My Drive/agent-monitor-context-audit-private`.
 The final cell prints full paths. For each phase:
 
-- `numeric-results/<phase>/public_scores.csv`: sanitized numeric rows.
-- `numeric-results/<phase>/reproduced/findings.md`: report.
-- `numeric-results/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
-- `runs-private/notebook-status/latest.json`: workflow status and output locations.
-- `runs-private/notebook-status/last-error.log`: last full private diagnostic.
-- `runs-private/qwen-<phase>/gpu_sessions/server_logs/` and `runner_logs/`: engine/worker logs.
+- `numeric-results/summary-v2/<phase>/public_scores.csv`: sanitized numeric rows.
+- `numeric-results/summary-v2/<phase>/reproduced/findings.md`: report.
+- `numeric-results/summary-v2/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
+- `runs-private/notebook-status/summary-v2/latest.json`: workflow status and output locations.
+- `runs-private/notebook-status/summary-v2/last-error.log`: last full private diagnostic.
+- `runs-private/qwen-<phase>-summary-v2-ctx196608/gpu_sessions/server_logs/`
+  and `runner_logs/`: engine/worker logs when inheriting the saved 196,608-token window.
 
 After a context adjustment, active run directories have a `-ctx<tokens>` suffix.
-The original attempt remains intact. Numeric reports still use `numeric-results/<phase>`;
-the printed diagnostic paths point to the active attempt.
+The original attempt remains intact. The suffix reflects the actual saved window;
+a workspace without a prior context choice initially has no context suffix.
+Earlier `numeric-results/<phase>` and `qwen-<phase>-ctx<tokens>` artifacts stay
+unchanged. The printed diagnostic paths always point to the selected version.
+
+`versions/summary-v2/` contains this version's configuration, context selection,
+source pin, durable Git metadata, source receipts and eventual frozen snapshot.
+On first setup it inherits the parent source pin, context selection and public
+manifests. Reconnects retain its own copies. The parent `configuration/model-pin.json`,
+`data-private/` and `runs-private/gpu_budget/` remain shared; versioning does not
+copy or reset model pins, dataset IDs, split assignments or GPU accounting.
 
 Reconnect a GPU, keep the same workspace name, select the next stage and use
 **Run all** again. Successful completed phases are checked against their recorded
@@ -112,16 +151,19 @@ Unknown dollar costs remain null throughout.
 
 ## Matching source without manual patches
 
-The notebook contains a compressed, checksummed copy of public runtime source and
-prompts, generated by `scripts/build_qwen_notebook.py`. It contains no benchmark
+The notebook contains a compressed, checksummed copy of public runtime source,
+prompts and the amended plan, decision record and operating guide, generated by
+`scripts/build_qwen_notebook.py`. It contains no benchmark
 content, model weights, credentials or private results. An initial repository clone
 supplies Git provenance; its exact commit stays pinned on Drive. The embedded copy
 repairs recognized old public-source versions without requiring a new branch push
 or a separate patch upload. Changed originals are backed up privately.
 
 All paths and hashes are checked before replacing files. Unknown local edits,
-source symlinks, incompatible recorded scientific code hashes and differing frozen
-source are rejected. Source updates never reset datasets, budget ledgers or results.
+source symlinks, incompatible recorded scientific code hashes within the selected
+version and differing frozen source are rejected. Only the explicit `summary-v2`
+path scopes the recorded-run guard to that version; the legacy path still protects
+all recorded runs. Source updates never reset datasets, budget ledgers or results.
 A frozen source snapshot takes precedence. Existing bundle-based workspaces remain
 readable, but a new guided run only needs this notebook.
 
@@ -192,11 +234,12 @@ limit is recorded in the [pinned model configuration](https://huggingface.co/Qwe
 
 Recovery requires matching source, prompts, configuration and dataset provenance,
 and no generation attempts, cached representations, request reservations, scores or
-completion records in any phase. A frozen protocol blocks it. Counts alone can
+completion records in any phase of the selected version. A frozen protocol blocks it. Counts alone can
 select context; evaluation outcomes cannot. If the inventory exceeds the native
 limit, the workflow stops for scope/model review without exclusions or truncation.
 
-The choice is saved to `configuration/context/selection.json`, with an adjustment
+The choice is saved to the selected source workspace's
+`configuration/context/selection.json`, with an adjustment
 history, the source preflight checksum and previous run identity. New phase configs
 and run directories use `-ctx<tokens>` names; the original configs, token counts,
 server logs and time receipts are retained. All subsequent stages, freeze checks,
@@ -208,7 +251,9 @@ generation. Hardware memory fit and long-context inference still need live valid
 
 To resume the reported failure, upload the rebuilt notebook, keep the current Drive
 folder and `STAGE = pilot`, confirm the form, then select **Run all**. There is no
-context variable to edit and no configuration file to delete.
+context variable to edit and no configuration file to delete. For `summary-v2`,
+the existing parent selection is inherited before startup; it is not recomputed
+from the earlier generation failures.
 
 ### Model, hardware and sampling
 

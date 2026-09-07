@@ -341,3 +341,53 @@ generation completes. The author requested focusing on correct execution; this
 change does not reset or rewrite time accounting.
 
 Source: [exact model configuration](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/config.json).
+
+## 2026-09-06: author-authorized summary-v2 development amendment
+
+The author supplied private pilot artifacts for offline diagnosis and authorized
+improving concision and regeneration while retaining the summary cap and citation
+validators. Saved development failures motivated this revision: summaries could
+exceed their cap, and a later shorter structured response could omit required
+claim-level or identifier-level citations. No held-out scores or transcript text
+are used in public prompts, documentation or tests.
+
+Codex changed the generic prompts for both summary conditions to target 60–80% of
+the same per-example budget, whose maximum remains 1,024 tokens. The permitted
+regeneration restates length, format, schema and citation requirements together
+and receives the original model-visible input. It receives neither the rejected
+candidate nor validation error text, labels or monitor feedback. The maximum is
+still two attempts total; all attempts are accounted for. Existing validators,
+null-score failures and the four conditions remain unchanged. This is a prompt
+and regeneration development amendment, not evidence of improved performance.
+
+The notebook's hidden `EXPERIMENT_VERSION = "summary-v2"` selects the local checkout
+`/content/agent-monitor-context-audit-summary-v2`. Its source/configuration provenance
+lives under Drive `versions/summary-v2/`, including source pin, context selection,
+Git metadata, source receipts and any later freeze. First setup copies the parent
+source pin, measured context and public manifests; reconnects do not overwrite
+the version's own copies. First creation is blocked by an already frozen parent
+or existing test run. The legacy source guard continues to protect all runs;
+only the explicit new version scopes its source guard to its own run manifests.
+
+With the inherited window, the new pilot uses
+`runs-private/qwen-pilot-summary-v2-ctx196608`, exports to
+`numeric-results/summary-v2/pilot`, and writes workflow diagnostics under
+`runs-private/notebook-status/summary-v2`. Pilot and development configurations
+record `development-summary-v2`; the reviewed held-out freeze keeps the existing
+`protocol-v1` contract. All 24 pilot evaluation units start afresh, including the
+previously successful conditions, so old calls and results are not mixed into
+the revised methods. Earlier caches, configs, reports and source remain intact.
+
+The parent model/tokenizer/runtime pin, private dataset, opaque IDs, family split,
+context choice and cumulative GPU ledger are shared. There are no new Drive
+symlinks, copied data or second GPU allowance. The user keeps the same Drive folder
+and existing start/data/rubric confirmations. The canonical notebook is rebuilt
+from source and delivered as `dist/qwen_colab_summary_v2_<hash>.ipynb` for upload;
+no public push or live generation is performed by this implementation.
+The embedded source explicitly includes the amended plan, this decision record and
+the operating guide so the eventual Colab freeze retains the revised methods.
+
+Synthetic tests exercise the prompt/repair contract, strict validation, isolated
+source/config/run/report routing, prior-artifact preservation and shared budget.
+These checks do not establish completion of the revised GPU pilot, better coverage
+or an empirical monitoring result. Full development still precedes reviewed test.

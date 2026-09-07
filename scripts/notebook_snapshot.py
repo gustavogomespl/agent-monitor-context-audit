@@ -11,6 +11,7 @@ def snapshot_path_allowed(name):
             or any(part.startswith(".") or part == "private" for part in path.parts)):
         return False
     return (name in {"pyproject.toml", "uv.lock", "requirements-colab.txt"}
+            or name in {"research_plan.md", "docs/decisions.md", "docs/qwen_colab.md"}
             or name in {"scripts/colab_bootstrap.py", "scripts/notebook_snapshot.py"}
             or (name.startswith("src/context_audit/") and path.suffix == ".py")
             or (name.startswith("prompts/") and path.suffix == ".txt"))
@@ -35,13 +36,25 @@ def scientific_source_hash(repo, replacements):
     ).encode()).hexdigest()
 
 
-def apply_embedded_source(repo, drive_root, *, frozen=False, encoded=None, expected=None):
+def apply_embedded_source(repo, drive_root, *, frozen=False, encoded=None, expected=None,
+                          run_root=None, run_version=None):
     import base64
     import hashlib
     import json
     import os
     import tempfile
     import zlib
+
+    if run_version is not None or run_root is not None:
+        if (run_version != "summary-v2" or run_root is None
+                or drive_root.resolve() != run_root.parent.resolve() / "versions/summary-v2"):
+            raise ValueError("A versioned source refresh requires its isolated version workspace.")
+        manifests = [
+            path for phase in ("pilot", "development", "test")
+            for path in run_root.glob(f"qwen-{phase}-summary-v2*/manifests/run.json")
+        ]
+    else:
+        manifests = (drive_root / "runs-private").glob("qwen-*/manifests/run.json")
 
     encoded = SOURCE_PAYLOAD_B64 if encoded is None else encoded
     expected = SOURCE_PAYLOAD_SHA256 if expected is None else expected
@@ -82,7 +95,7 @@ def apply_embedded_source(repo, drive_root, *, frozen=False, encoded=None, expec
 
     # A source refresh cannot turn a recorded scientific run into different methods.
     resulting_hash = scientific_source_hash(repo, contents)
-    for manifest in (drive_root / "runs-private").glob("qwen-*/manifests/run.json"):
+    for manifest in manifests:
         if json.loads(manifest.read_text())["code_hash"] != resulting_hash:
             raise ValueError("Recorded run code differs from this notebook. Preserve its results "
                              "and use a new explicitly exploratory workspace for changed methods.")

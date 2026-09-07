@@ -91,6 +91,44 @@ def test_recorded_scientific_code_cannot_be_changed_by_snapshot(tmp_path):
     assert source.read_text() == "old\n"
 
 
+def test_explicit_version_uses_isolated_source_and_retains_legacy_run(tmp_path):
+    repo, drive = tmp_path / "repo", tmp_path / "drive"
+    source = repo / "src/context_audit/example.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("old\n")
+    old = drive / "runs-private/qwen-pilot-ctx196608/manifests/run.json"
+    old.parent.mkdir(parents=True)
+    old.write_text(json.dumps({"code_hash": "old-run-hash"}))
+    encoded, expected = payload()
+    apply(repo, drive / "versions/summary-v2", encoded=encoded, expected=expected,
+          run_root=drive / "runs-private", run_version="summary-v2")
+    assert source.read_text() == "new\n"
+    assert json.loads(old.read_text()) == {"code_hash": "old-run-hash"}
+
+
+def test_existing_version_run_still_blocks_scientific_source_drift(tmp_path):
+    repo, drive = tmp_path / "repo", tmp_path / "drive"
+    source = repo / "src/context_audit/example.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("old\n")
+    active = drive / "runs-private/qwen-pilot-summary-v2-ctx196608/manifests/run.json"
+    active.parent.mkdir(parents=True)
+    active.write_text(json.dumps({"code_hash": "prior-v2-hash"}))
+    encoded, expected = payload()
+    with pytest.raises(ValueError, match="Recorded run code"):
+        apply(repo, drive / "versions/summary-v2", encoded=encoded, expected=expected,
+              run_root=drive / "runs-private", run_version="summary-v2")
+    assert source.read_text() == "old\n"
+
+
+def test_version_cannot_bypass_source_guard_in_legacy_workspace(tmp_path):
+    encoded, expected = payload()
+    tmp_path.joinpath("repo").mkdir()
+    with pytest.raises(ValueError, match="isolated|version"):
+        apply(tmp_path / "repo", tmp_path / "drive", encoded=encoded, expected=expected,
+              run_root=tmp_path / "drive/runs-private", run_version="summary-v2")
+
+
 def test_source_symlink_cannot_escape_into_private_storage(tmp_path):
     target = tmp_path / "private"
     target.mkdir()
@@ -121,3 +159,5 @@ def test_delivered_notebook_contains_current_public_source_only():
         assert hashlib.sha256(record["text"].encode()).hexdigest() == record["sha256"]
         paths.add(name)
     assert {"src/context_audit/colab.py", "scripts/colab_bootstrap.py", "uv.lock"} <= paths
+    # The eventual Colab freeze must include the amended methods and decision record.
+    assert {"research_plan.md", "docs/decisions.md", "docs/qwen_colab.md"} <= paths

@@ -9,6 +9,7 @@ from pathlib import Path
 # Defaults are inert; preserve the settings and snapshot function supplied by the notebook.
 START_RUN = globals().get("START_RUN", False)
 STAGE = globals().get("STAGE", "pilot")
+EXPERIMENT_VERSION = globals().get("EXPERIMENT_VERSION", "legacy")
 DATA_USE_CONFIRMED = globals().get("DATA_USE_CONFIRMED", False)
 RUBRIC_REVIEWED = globals().get("RUBRIC_REVIEWED", False)
 DEVELOPMENT_REVIEWED = globals().get("DEVELOPMENT_REVIEWED", False)
@@ -32,6 +33,74 @@ CODE_REF = globals().get("CODE_REF", "")
 PROJECT_ZIP = globals().get("PROJECT_ZIP", "")
 SETUP_READY = globals().get("SETUP_READY", False)
 apply_embedded_source = globals().get("apply_embedded_source", None)
+
+
+def source_workspace():
+    """Only the explicit development amendment gets a separate source workspace."""
+    if EXPERIMENT_VERSION == "legacy":
+        return DRIVE_ROOT
+    if EXPERIMENT_VERSION == "summary-v2":
+        return DRIVE_ROOT / "versions/summary-v2"
+    raise ValueError("Unknown experiment version; choose the matching reviewed notebook.")
+
+
+def prepare_version_workspace():
+    """Inherit immutable setup choices once, without importing prior generation records."""
+    import json
+    import shutil
+
+    workspace = source_workspace()
+    if EXPERIMENT_VERSION == "legacy":
+        return
+    marker = workspace / "configuration/version.json"
+    if marker.exists():
+        if json.loads(marker.read_text()).get("experiment_version") != EXPERIMENT_VERSION:
+            raise ValueError("Saved experiment version differs from this notebook.")
+        return
+    frozen = any(path.exists() for path in (
+        DRIVE_ROOT / "frozen-source.zip", DRIVE_ROOT / "public-manifests/protocol-v1.json",
+    ))
+    test_runs = list((DRIVE_ROOT / "runs-private").glob("qwen-test*/manifests/run.json"))
+    for manifest in (DRIVE_ROOT / "runs-private").glob("qwen-*/manifests/run.json"):
+        if json.loads(manifest.read_text()).get("config", {}).get("split") == "test":
+            test_runs.append(manifest)
+    if frozen or test_runs:
+        raise ValueError("Prior frozen/test evidence requires review as a separate exploratory "
+                         "study; this notebook amendment is for development only.")
+    inherited = [DRIVE_ROOT / "configuration/code-pin.json",
+                 DRIVE_ROOT / "configuration/context/selection.json"]
+    inherited.extend(path for path in (DRIVE_ROOT / "public-manifests").glob("*")
+                     if path.is_file())
+    for source in inherited:
+        if not source.exists():
+            continue
+        target = workspace / source.relative_to(DRIVE_ROOT)
+        # A retry after interrupted preparation must never overwrite partial setup.
+        if target.exists():
+            if target.read_bytes() != source.read_bytes():
+                raise ValueError("Incomplete version setup differs from its parent; "
+                                 "review required.")
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    temporary = marker.with_suffix(".tmp")
+    temporary.write_text(json.dumps({
+        "experiment_version": EXPERIMENT_VERSION,
+        "reason": "Development summary length and citation amendment; fresh complete pilot",
+        "parent": "legacy", "shared_data_model_and_gpu_budget": True,
+    }, indent=2) + "\n")
+    temporary.replace(marker)
+
+
+def numeric_results_root():
+    root = DRIVE_ROOT / "numeric-results"
+    return root if EXPERIMENT_VERSION == "legacy" else root / EXPERIMENT_VERSION
+
+
+def status_directory():
+    root = DRIVE_ROOT / "runs-private/notebook-status"
+    return root if EXPERIMENT_VERSION == "legacy" else root / EXPERIMENT_VERSION
 
 
 def mount_workspace():
@@ -196,7 +265,7 @@ def bind_private_directory(relative, durable):
 def save_public_manifests():
     import shutil
 
-    destination = DRIVE_ROOT / "public-manifests"
+    destination = source_workspace() / "public-manifests"
     destination.mkdir(parents=True, exist_ok=True)
     for source in (REPO / "data/manifests").glob("*"):
         if source.is_file():
@@ -279,13 +348,15 @@ def phase_settings(phase):
 
     if phase not in {"pilot", "development", "test"}:
         raise ValueError("Choose pilot, development, or test.")
-    selection = DRIVE_ROOT / "configuration/context/selection.json"
+    workspace = source_workspace()
+    name = phase if EXPERIMENT_VERSION == "legacy" else f"{phase}-{EXPERIMENT_VERSION}"
+    selection = workspace / "configuration/context/selection.json"
     if not selection.exists():
-        return phase, MAX_MODEL_LEN
+        return name, MAX_MODEL_LEN
     window = json.loads(selection.read_text())["context_window"]
     if type(window) is not int or not 2048 <= window <= 262144:
         raise ValueError("Invalid saved context selection; review the private configuration.")
-    return f"{phase}-ctx{window}", window
+    return f"{name}-ctx{window}", window
 
 
 def phase_run_dir(phase):
@@ -312,12 +383,19 @@ def prepare_context_window():
     if not preflight.get("context_limit_ids"):
         return False
     if any(path.exists() for path in (
-        DRIVE_ROOT / "frozen-source.zip", DRIVE_ROOT / "public-manifests/protocol-v1.json",
+        source_workspace() / "frozen-source.zip",
+        source_workspace() / "public-manifests/protocol-v1.json",
         REPO / "data/manifests/protocol-v1.json",
     )):
         raise ValueError("Context recovery cannot change a frozen protocol; review required.")
     # Include unsuccessful, pending and uncertain requests, not just successful scores.
     for run in (DRIVE_ROOT / "runs-private").glob("qwen-*"):
+        if EXPERIMENT_VERSION != "legacy" and not any(
+            run.name == f"qwen-{phase}-{EXPERIMENT_VERSION}"
+            or run.name.startswith(f"qwen-{phase}-{EXPERIMENT_VERSION}-ctx")
+            for phase in ("pilot", "development", "test")
+        ):
+            continue
         generation = any((run / name).exists() for name in (
             "scores.csv", "manifests/completion.json",
         )) or any(any((run / name).rglob("*")) for name in (
@@ -329,7 +407,7 @@ def prepare_context_window():
             raise ValueError("Context recovery found generation evidence; preserve runs "
                              "for review.")
     name, _ = phase_settings("pilot")
-    if not (DRIVE_ROOT / "configuration" / f"{name}.json").exists():
+    if not (source_workspace() / "configuration" / f"{name}.json").exists():
         raise ValueError("Context preflight lacks its saved configuration; review required.")
     config = configured_phase("pilot")
     manifest = json.loads((directory / "manifests/run.json").read_text())
@@ -379,7 +457,7 @@ def prepare_context_window():
         reason="Complete token inventory before any generation; retain all full inputs",
         selected_at=utc_now(),
     )
-    store = PrivateStore(DRIVE_ROOT / "configuration")
+    store = PrivateStore(source_workspace() / "configuration")
     store.put("context", f"from-{previous}-to-{selected}", record)
     store.put("context", "selection", record)
     print(f"Context inventory: {len(items)} transcripts; maximum request plus output: "
@@ -411,7 +489,9 @@ def configured_phase(phase):
     config = AuditConfig(
         provider="qwen_local",
         qwen=backend,
-        protocol_version="protocol-v1" if phase == "test" else "development-v1",
+        protocol_version=("protocol-v1" if phase == "test" else
+                          "development-v1" if EXPERIMENT_VERSION == "legacy" else
+                          f"development-{EXPERIMENT_VERSION}"),
         split="test" if phase == "test" else "development",
         dataset_dir="data/private",
         run_dir=str(phase_run_dir(phase)),
@@ -425,7 +505,7 @@ def configured_phase(phase):
         rubric_reviewed=RUBRIC_REVIEWED,
         protocol_file="data/manifests/protocol-v1.json",
     )
-    path = DRIVE_ROOT / "configuration" / f"{name}.json"
+    path = source_workspace() / "configuration" / f"{name}.json"
     payload = config.model_dump()
     if path.exists() and json.loads(path.read_text()) != payload:
         raise ValueError(
@@ -442,11 +522,13 @@ def prepare_source():
     import subprocess
     import tempfile
 
-    configuration = DRIVE_ROOT / "configuration"
-    configuration.mkdir(exist_ok=True)
-    saved_upload = DRIVE_ROOT / "source-upload.zip"
-    frozen_source = DRIVE_ROOT / "frozen-source.zip"
-    durable_git = DRIVE_ROOT / "git-metadata"
+    prepare_version_workspace()
+    workspace = source_workspace()
+    configuration = workspace / "configuration"
+    configuration.mkdir(parents=True, exist_ok=True)
+    saved_upload = workspace / "source-upload.zip"
+    frozen_source = workspace / "frozen-source.zip"
+    durable_git = workspace / "git-metadata"
     code_pin_path = configuration / "code-pin.json"
     source_kind = "git" if REPO_URL and not PROJECT_ZIP and not saved_upload.exists() else "bundle"
     if frozen_source.exists():
@@ -493,12 +575,15 @@ def prepare_source():
     bind_git_metadata(REPO, durable_git, expected_commit)
     bind_private_directory("data/private", DRIVE_ROOT / "data-private")
     bind_private_directory("runs/private", DRIVE_ROOT / "runs-private")
-    saved_manifests = DRIVE_ROOT / "public-manifests"
+    saved_manifests = workspace / "public-manifests"
     if saved_manifests.exists():
         shutil.copytree(saved_manifests, REPO / "data/manifests", dirs_exist_ok=True)
 
 
-    apply_embedded_source(REPO, DRIVE_ROOT, frozen=source_kind == "frozen")
+    options = {} if EXPERIMENT_VERSION == "legacy" else {
+        "run_root": DRIVE_ROOT / "runs-private", "run_version": EXPERIMENT_VERSION,
+    }
+    apply_embedded_source(REPO, workspace, frozen=source_kind == "frozen", **options)
 
 
 def install_commands(pin):
@@ -529,7 +614,8 @@ def install_runtime():
     from datetime import datetime, timezone
 
     configuration = DRIVE_ROOT / "configuration"
-    code_pin_path = configuration / "code-pin.json"
+    configuration.mkdir(parents=True, exist_ok=True)
+    code_pin_path = source_workspace() / "configuration/code-pin.json"
     pin_path = configuration / "model-pin.json"
     if pin_path.exists():
         pin = json.loads(pin_path.read_text())
@@ -569,7 +655,7 @@ def install_runtime():
     packages = subprocess.run(
         [sys.executable, "-m", "pip", "freeze"], capture_output=True, text=True, check=True
     ).stdout
-    setup_history = configuration / "setup-history"
+    setup_history = source_workspace() / "configuration/setup-history"
     setup_history.mkdir(exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     code_commit = subprocess.run(
@@ -577,6 +663,7 @@ def install_runtime():
     ).stdout.strip()
     setup_record = {
         "schema_version": 1,
+        "experiment_version": EXPERIMENT_VERSION,
         "created_at": timestamp,
         "python": sys.version,
         "code_commit": code_commit,
@@ -656,7 +743,7 @@ def freeze_reviewed():
             ).stdout.strip()
             if tagged.stdout.strip() != head:
                 raise ValueError("Existing protocol-v1 does not identify HEAD; no tag was changed.")
-        archive = DRIVE_ROOT / "frozen-source.zip"
+        archive = source_workspace() / "frozen-source.zip"
         subprocess.run(
             ["git", "archive", "--format=zip", f"--output={archive}", "HEAD"], check=True
         )
@@ -903,7 +990,7 @@ def export_phase(phase, seconds):
     if seconds <= 1:
         raise ValueError("No remaining time for reports. Reproduce the saved scores on CPU.")
     run_dir = phase_run_dir(phase)
-    numeric = DRIVE_ROOT / "numeric-results" / phase
+    numeric = numeric_results_root() / phase
     numeric.mkdir(parents=True, exist_ok=True)
     commands = []
     if (run_dir / "scores.csv").exists():
@@ -1026,7 +1113,7 @@ def record_status(result, error=None):
     import json
     import traceback
 
-    folder = DRIVE_ROOT / "runs-private/notebook-status"
+    folder = status_directory()
     folder.mkdir(parents=True, exist_ok=True)
     if error is not None:
         phase = result.get("active_phase", STAGE)
@@ -1060,7 +1147,9 @@ def run_guided():
 
     SETUP_READY = False
     started, allocation = time.monotonic(), None
-    result = dict(status="preparing", stage=STAGE, phases={})
+    result = dict(status="preparing", stage=STAGE, experiment_version=EXPERIMENT_VERSION, phases={})
+    print(f"Experiment: {EXPERIMENT_VERSION} | Notebook build: "
+          f"{globals().get('NOTEBOOK_BOOTSTRAP_SHA256', 'source')[:12]}", flush=True)
     print(f"Stage: {STAGE} | Workspace: {DRIVE_ROOT} | Model: {MODEL_ID} (vLLM {VLLM_VERSION})"
           f" | Shared budget: {MAX_GPU_HOURS:g} GPU hours", flush=True)
     print("Plan: GPU check > Drive + budget > source + dependencies > dataset > inference > "
@@ -1090,6 +1179,7 @@ def run_guided():
                 available = min(budget["remaining_seconds"], allocation.remaining())
                 print(f"[5/6] {phase}: checking saved progress and running four conditions.",
                       flush=True)
+                print("  Run:", config.run_dir, flush=True)
                 if phase_complete(config):
                     summary = {"status": "executed", "reused_completed_run": True}
                     print(f"  {phase} is already complete; reusing its saved evaluations.",
@@ -1125,7 +1215,7 @@ def run_guided():
                     print("Run incomplete. Saved records require review before advancing.")
                     break
         record_status(result)
-        print("Finished:", result["status"], "| Results:", DRIVE_ROOT / "numeric-results")
+        print("Finished:", result["status"], "| Results:", numeric_results_root())
         if STAGE == "development" and result["status"] == "executed":
             print("Review the development report before selecting test in a later run.")
         return result
@@ -1135,7 +1225,7 @@ def run_guided():
         print("Stopped:", reason, flush=True)
         record_status(result, error)
         print("Full private diagnostic:",
-              DRIVE_ROOT / "runs-private/notebook-status/last-error.log")
+              status_directory() / "last-error.log")
         phase = result.get("active_phase", STAGE)
         print("Server logs:",
               DRIVE_ROOT / "runs-private" / phase_run_dir(phase).name / "gpu_sessions")
