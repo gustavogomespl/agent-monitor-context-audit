@@ -132,6 +132,7 @@ class AuditConfig(StrictModel):
     summarizer_context_window: int | None = Field(default=None, gt=0)
     monitor_max_tokens: int = Field(default=700, gt=0)
     summary_max_tokens: int = Field(default=1600, gt=0)
+    structured_summary_mode: Literal["prompt", "schema_citations_v1"] = "prompt"
     token_fraction: float = Field(default=0.25, gt=0, le=1)
     token_minimum: int = Field(default=128, gt=0)
     token_maximum: int = Field(default=1024, gt=0)
@@ -152,6 +153,8 @@ class AuditConfig(StrictModel):
 
     @model_validator(mode="after")
     def check_scope(self):
+        if self.structured_summary_mode != "prompt" and self.provider != "qwen_local":
+            raise ValueError("Schema-constrained summaries require the Qwen provider")
         if self.token_maximum < self.token_minimum:
             raise ValueError("token_maximum must be >= token_minimum")
         if self.split == "test" and self.pilot_pairs is not None:

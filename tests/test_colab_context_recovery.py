@@ -231,3 +231,52 @@ def test_new_workspace_without_preflight_keeps_existing_configuration(preflight)
     (directory / "manifests/preflight.json").unlink()
     assert prepare(ns) is False
     assert ns["configured_phase"]("pilot").qwen.max_model_len == 65536
+
+
+@pytest.fixture
+def v3_preflight(preflight):
+    ns, previous, inventory = preflight
+    ns["EXPERIMENT_VERSION"] = "summary-v3"
+    ns["prepare_version_workspace"]()
+    config = ns["configured_phase"]("pilot")
+    directory = ns["DRIVE_ROOT"] / "runs-private/qwen-pilot-summary-v3"
+    manifests = directory / "manifests"
+    manifests.mkdir(parents=True)
+    saved = json.loads((previous / "manifests/run.json").read_text())
+    saved.update(config=config.model_dump(), run_id="synthetic-v3-context-run")
+    (manifests / "run.json").write_text(json.dumps(saved))
+    (manifests / "preflight.json").write_text(json.dumps(inventory))
+    # Earlier version requests remain private evidence, not new-version generation.
+    for name in ("qwen-pilot", "qwen-pilot-summary-v2-ctx196608"):
+        calls = ns["DRIVE_ROOT"] / "runs-private" / name / "calls"
+        calls.mkdir(parents=True, exist_ok=True)
+        (calls / "synthetic.json").write_text("Earlier generation must remain unchanged")
+    return ns, directory
+
+
+def test_v3_context_recovery_preserves_old_generation_and_parent_context(v3_preflight):
+    ns, directory = v3_preflight
+    root = ns["DRIVE_ROOT"]
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    assert prepare(ns) is True
+    for path, contents in before.items():
+        assert path.read_bytes() == contents
+    assert not (root / "configuration/context/selection.json").exists()
+    assert not (root / "versions/summary-v2/configuration/context/selection.json").exists()
+    assert (root / "versions/summary-v3/configuration/context/selection.json").is_file()
+    for phase in ("pilot", "development", "test"):
+        config = ns["configured_phase"](phase)
+        assert config.qwen.max_model_len == 163840
+        assert config.run_dir == f"runs/private/qwen-{phase}-summary-v3-ctx163840"
+        assert config.structured_summary_mode == "schema_citations_v1"
+    assert directory.is_dir()
+
+
+def test_v3_context_recovery_still_rejects_its_own_generation(v3_preflight):
+    ns, directory = v3_preflight
+    calls = directory / "calls"
+    calls.mkdir()
+    (calls / "synthetic.json").write_text("New-version generation also requires review")
+    with pytest.raises(ValueError, match="generation|review"):
+        prepare(ns)
+    assert not (ns["source_workspace"]() / "configuration/context/selection.json").exists()

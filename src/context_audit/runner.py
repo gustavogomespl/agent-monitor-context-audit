@@ -39,6 +39,10 @@ from context_audit.runtime_models import (
 )
 from context_audit.schemas import EvaluationLabel, TranscriptInput
 from context_audit.storage import PrivateStore, digest
+from context_audit.structured_summary import (
+    assemble_structured_summary,
+    structured_summary_schema,
+)
 
 
 def load_config(path: Path) -> AuditConfig:
@@ -68,9 +72,14 @@ def _unpriced(config: AuditConfig) -> bool:
 
 
 def prompts(config: AuditConfig) -> dict[str, str]:
+    names = {name: name for name in (
+        "monitor", "summary_common", "summary_free", "summary_structured"
+    )}
+    if config.structured_summary_mode == "schema_citations_v1":
+        names["summary_structured"] = "summary_structured_schema"
     return {
-        name: (Path(config.prompt_dir) / f"{name}.txt").read_text()
-        for name in ("monitor", "summary_common", "summary_free", "summary_structured")
+        name: (Path(config.prompt_dir) / f"{filename}.txt").read_text()
+        for name, filename in names.items()
     }
 
 
@@ -110,6 +119,13 @@ _SUMMARY_VALIDATION_REASONS = {
     "Invalid source_event_ids": "invalid_source_event_ids",
     "Source IDs must match IDs cited in claims": "source_event_ids_mismatch",
     "Missing or unknown source event IDs": "missing_or_unknown_event_ids",
+    "Duplicate structured draft keys": "duplicate_draft_keys",
+    "Structured draft is not strict JSON": "invalid_json",
+    "Structured draft fields do not match schema": "draft_schema_fields_mismatch",
+    "Structured draft claims must be arrays of citation objects": "invalid_draft_claim_arrays",
+    "Structured draft claim fields do not match schema": "draft_claim_fields_mismatch",
+    "Structured draft claims require nonempty text": "empty_draft_claim",
+    "Claim text references event IDs not selected for this item": "unassigned_claim_event_id",
 }
 
 
@@ -166,8 +182,15 @@ def make_representation(
         )
         request = _summary_request(transcript, body, budget)
         visible = {event.event_id for event in transcript.events}
+        schema_mode = (
+            condition == "structured_summary"
+            and config.structured_summary_mode == "schema_citations_v1"
+        )
         text, status, keys = "", "invalid_output", []
         for attempt in range(config.max_attempts):
+            generation_options = {"structured_schema": structured_summary_schema(visible)} if (
+                schema_mode
+            ) else {}
             key, call = provider.generate(
                 model=config.summarizer_model,
                 system=system,
@@ -175,17 +198,46 @@ def make_representation(
                 max_tokens=config.summary_max_tokens,
                 context_window=summary_window,
                 identity=_identity(transcript, config, condition, repetition, "summary", attempt),
+                **generation_options,
             )
             calls.append(call)
             keys.append(key)
             status = call["status"]
             measured = None
             reason = "provider_response_failed"
+            assembly_diagnostic = dict(
+                assembly_mode="schema_citations_v1",
+                raw_text_hash=digest(call["text"]),
+                raw_measured_tokens=None,
+                assembled_text_hash=None,
+                assembled_tokens=None,
+                assembly_key=None,
+            ) if schema_mode else {}
             if status == "ok":
                 try:
-                    measured = count(call["text"])
+                    candidate = call["text"]
+                    raw_measured = count(candidate)
+                    if schema_mode:
+                        assembly_diagnostic["raw_measured_tokens"] = raw_measured
+                        candidate = assemble_structured_summary(candidate, visible)
+                        assembly_key = digest(_identity(
+                            transcript, config, condition, repetition, "summary_assembly", attempt
+                        ))
+                        assembly_diagnostic.update(
+                            assembled_text_hash=digest(candidate), assembly_key=assembly_key
+                        )
+                        store.put("summary_assemblies", assembly_key, dict(
+                            text=candidate,
+                            raw_call_key=key,
+                            assembly_mode="schema_citations_v1",
+                            canaries=getattr(provider, "canaries", []),
+                        ))
+                        measured = count(candidate)
+                        assembly_diagnostic["assembled_tokens"] = measured
+                    else:
+                        measured = raw_measured
                     text = validate_summary(
-                        call["text"], condition, budget, lambda _: measured, visible
+                        candidate, condition, budget, lambda _: measured, visible
                     )
                     reason = "valid"
                 except TokenCountError:
@@ -194,7 +246,9 @@ def make_representation(
                     text, status = "", "api_error"
                     reason = "token_count_failed"
                 except ValueError as exc:
-                    status = "budget_violation" if measured > budget else "invalid_output"
+                    status = "budget_violation" if (
+                        measured is not None and measured > budget
+                    ) else "invalid_output"
                     reason = _SUMMARY_VALIDATION_REASONS.get(str(exc), "invalid_summary")
             # Content-free, private diagnostics retain the exact measured failure without
             # copying candidates, source text, annotations or arbitrary exception strings.
@@ -213,6 +267,7 @@ def make_representation(
                 token_ceiling=budget,
                 counter_method=provider.counter_method,
                 canaries=getattr(provider, "canaries", []),
+                **assembly_diagnostic,
             ))
             if status == "ok" or reason == "token_count_failed":
                 break

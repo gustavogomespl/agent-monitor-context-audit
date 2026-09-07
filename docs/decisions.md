@@ -391,3 +391,81 @@ Synthetic tests exercise the prompt/repair contract, strict validation, isolated
 source/config/run/report routing, prior-artifact preservation and shared budget.
 These checks do not establish completion of the revised GPU pilot, better coverage
 or an empirical monitoring result. Full development still precedes reviewed test.
+
+## 2026-09-07: author-authorized summary-v3 schema and citation amendment
+
+The author authorized another development version after offline diagnosis of two
+remaining citation-validation failures in the summary-v2 pilot. These were saved
+development failures; held-out scores did not motivate the change. No benchmark
+text, private example identifiers, annotations or canaries are included here or
+in public prompts and tests.
+
+For Qwen, `structured_summary_mode="schema_citations_v1"` selects constrained
+JSON-schema decoding for the structured summarizer. The internal generated draft
+has four claim fields, each an array of objects with required string `text` and
+nonempty `evidence_event_ids`. Reference values are restricted to an enumeration
+of that transcript's visible IDs; additional properties are forbidden. There is
+no global draft index and no cited-string regular-expression constraint.
+
+The renderer rejects empty or blank text locally, preserves accepted item text
+and appends bracketed citations from only
+the references the model selected for that item. It produces the existing four
+arrays of cited strings and derives the fifth field, `source_event_ids`, as the
+sorted union of selected references. Rendering neither adds nor removes claims,
+infers evidence, invents references or repairs meaning. Raw drafts are retained
+privately, so the model's selections and final representation remain inspectable.
+The unchanged final validator rejects unknown IDs and uncited claims, verifies
+the complete five-field representation and measures its full serialized JSON,
+including the assembled ID list, under the existing per-example cap of at most
+1,024 tokens. No summary is silently truncated to pass validation.
+
+Actual CPU checks of XGrammar 0.2.3 showed that a cited-string pattern was not a
+reliable per-item constraint: a neighboring cited item could permit an uncited
+item. The final design uses explicit typed references on each claim instead.
+Only summary-v3 requires the explicit `xgrammar==0.2.3` pin and performs a grammar
+compiler/matcher check before model weights are loaded. Independent synthetic
+valid drafts are accepted, while missing, empty and unknown references are rejected
+even beside cited neighbors; missing text and extra properties are also rejected.
+This check exercises the actual decoder backend on CPU without model generation.
+The mechanism uses [vLLM 0.28.0 structured outputs](https://docs.vllm.ai/en/v0.28.0/features/structured_outputs/).
+
+The raw generation allowance remains 1,600 tokens and there are at most two
+attempts, with both recorded and charged. Both summary conditions retain the
+60–80% target and common evidence priorities introduced in summary-v2. The allowed
+regeneration receives the original input and the required constraints; it does not
+receive the rejected response, validation error text, labels or monitor decisions.
+The monitor, failure/null-score policy, four conditions and family split retain
+their contracts. Earlier prompt-only structured-summary mode remains readable.
+
+This amendment changes the whole structured-summary intervention, including the
+decoder and deterministic assembly. A future difference between conditions cannot
+be attributed solely to JSON syntax. Requiring explicit citation references does not prove
+that a statement is faithful to the cited evidence. The final validator and later
+human assessment retain their distinct roles.
+
+The notebook hides `EXPERIMENT_VERSION="summary-v3"` in its implementation and uses
+`/content/agent-monitor-context-audit-summary-v3` for local source. Drive
+`versions/summary-v3/` isolates source/configuration provenance and Git metadata.
+On first setup it inherits the available summary-v2 source pin/context, falling
+back to the legacy selection, and retains its own copies on reconnect. Creating
+the version is blocked by a frozen or test-run workspace in earlier versions or
+the legacy path. Old source, configurations, caches, reports and numeric results
+remain intact; this does not authorize rewriting any frozen protocol.
+
+With the inherited context, the new pilot uses
+`runs-private/qwen-pilot-summary-v3-ctx196608`, saves outputs under
+`numeric-results/summary-v3/pilot`, and writes diagnostics to
+`runs-private/notebook-status/summary-v3`. All 24 pilot units start afresh, including
+previously successful conditions. Later resumptions can use this version's own
+incremental records, without mixing earlier-version responses into the new pilot.
+The original Drive root still supplies the shared private dataset, opaque IDs,
+family split, model/tokenizer/runtime pins and cumulative GPU ledger. There is no
+new 12-hour allowance.
+
+Codex implemented this author-requested amendment and the notebook is delivered
+as `dist/qwen_colab_summary_v3_<hash>.ipynb`. Source and mode provenance distinguish
+it from summary-v2. Offline validation is not GPU validation of constrained decoding
+or evidence of a successful revised pilot or improved monitoring performance.
+Explicit start/data-use/rubric confirmations and full development before reviewed
+test remain required. No publication, public push or live generation is performed
+by this implementation.

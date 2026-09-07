@@ -129,17 +129,18 @@ def test_all_colab_phases_carry_the_saved_runtime_fingerprint(tmp_path, monkeypa
         DATA_USE_CONFIRMED=True,
         RUBRIC_REVIEWED=True,
     )
-    assert namespace["EXPERIMENT_VERSION"] == "summary-v2"
-    assert namespace["REPO"] == Path("/content/agent-monitor-context-audit-summary-v2")
+    assert namespace["EXPERIMENT_VERSION"] == "summary-v3"
+    assert namespace["REPO"] == Path("/content/agent-monitor-context-audit-summary-v3")
     namespace["prepare_version_workspace"]()
     configuration = namespace["source_workspace"]() / "configuration"
     for phase in ("pilot", "development", "test"):
         config = namespace["configured_phase"](phase)
         assert config.qwen.runtime_versions == versions
+        assert config.structured_summary_mode == "schema_citations_v1"
         assert config.qwen.gpu_budget_hours == 12.0
         assert config.qwen.gpu_hourly_rate_usd is None
         assert config.timeout_seconds == 300
-        saved = json.loads((configuration / f"{phase}-summary-v2.json").read_text())
+        saved = json.loads((configuration / f"{phase}-summary-v3.json").read_text())
         assert saved["qwen"]["runtime_versions"] == versions
         assert saved["qwen"]["gpu_budget_hours"] == 12.0
 

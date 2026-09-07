@@ -45,6 +45,42 @@
 > succeeds or improves monitoring performance. The original proposal below is
 > retained as historical context; this note defines the amended Qwen behavior.
 
+> **Development amendment — summary-v3 (2026-09-07).** After offline diagnosis of
+> two remaining citation-validation failures in the summary-v2 development pilot,
+> the author authorized a new structured-summary generation mode. Qwen uses
+> `structured_summary_mode="schema_citations_v1"`: constrained JSON-schema decoding
+> produces an internal draft of four arrays of objects with required string `text` and
+> nonempty `evidence_event_ids`, whose values must be selected from that transcript's
+> visible IDs. Both properties are required; extra properties and a global draft
+> index are excluded. It does not rely on a cited-string regular expression.
+> Rendering rejects empty or blank text locally, preserves accepted text and appends only
+> the model-selected
+> citations, yielding the existing arrays of cited strings. It adds the fifth field,
+> `source_event_ids`, as the sorted union of these selected IDs. Rendering does not
+> add or remove claims, infer evidence or repair meaning. Raw drafts remain private.
+> The unchanged final validator checks the complete five-field representation,
+> rejects unknown IDs and uncited claims, and measures all JSON content, including the
+> assembled IDs, against the unchanged per-example cap of at most 1,024 tokens.
+> The raw generation allowance remains 1,600 tokens and the maximum remains two
+> attempts. Both summary conditions retain the generic 60–80% target and common
+> evidence priorities introduced in summary-v2.
+> Summary-v3 additionally pins `xgrammar==0.2.3`; before loading weights, a CPU
+> compiler/matcher check verifies valid drafts and rejects missing, empty or unknown
+> per-item references, including beside a cited neighbor. This is a decoder check,
+> not model generation or evidence that the cited events entail the claims.
+>
+> This changes the complete structured-summary intervention, including decoding
+> and deterministic assembly; the comparison does not isolate a JSON syntax effect.
+> All 24 pilot units start afresh in `summary-v3`. Legacy and summary-v2 calls,
+> prompts/configurations and results remain separate and readable. The new source
+> workspace inherits the available summary-v2 source pin/context, otherwise the
+> legacy selection, while sharing the original data, model/runtime pins and remaining
+> 12-hour GPU allowance. Creating the version is blocked if an earlier workspace
+> is frozen or has test-run evidence. Development failures motivated the amendment,
+> not held-out performance. No GPU validation of this mode or improved monitoring
+> result is established by its implementation; full development and reviewed test
+> remain separate requirements.
+
 ## Plano de pesquisa e implementação para o Codex
 
 **Data:** 5 de setembro de 2026.  

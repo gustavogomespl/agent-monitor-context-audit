@@ -91,7 +91,8 @@ def test_recorded_scientific_code_cannot_be_changed_by_snapshot(tmp_path):
     assert source.read_text() == "old\n"
 
 
-def test_explicit_version_uses_isolated_source_and_retains_legacy_run(tmp_path):
+@pytest.mark.parametrize("version", ["summary-v2", "summary-v3"])
+def test_explicit_version_uses_isolated_source_and_retains_legacy_run(tmp_path, version):
     repo, drive = tmp_path / "repo", tmp_path / "drive"
     source = repo / "src/context_audit/example.py"
     source.parent.mkdir(parents=True)
@@ -100,33 +101,66 @@ def test_explicit_version_uses_isolated_source_and_retains_legacy_run(tmp_path):
     old.parent.mkdir(parents=True)
     old.write_text(json.dumps({"code_hash": "old-run-hash"}))
     encoded, expected = payload()
-    apply(repo, drive / "versions/summary-v2", encoded=encoded, expected=expected,
-          run_root=drive / "runs-private", run_version="summary-v2")
+    apply(repo, drive / "versions" / version, encoded=encoded, expected=expected,
+          run_root=drive / "runs-private", run_version=version)
     assert source.read_text() == "new\n"
     assert json.loads(old.read_text()) == {"code_hash": "old-run-hash"}
 
 
-def test_existing_version_run_still_blocks_scientific_source_drift(tmp_path):
+@pytest.mark.parametrize("version", ["summary-v2", "summary-v3"])
+def test_existing_version_run_still_blocks_scientific_source_drift(tmp_path, version):
     repo, drive = tmp_path / "repo", tmp_path / "drive"
     source = repo / "src/context_audit/example.py"
     source.parent.mkdir(parents=True)
     source.write_text("old\n")
-    active = drive / "runs-private/qwen-pilot-summary-v2-ctx196608/manifests/run.json"
+    active = drive / "runs-private" / f"qwen-pilot-{version}-ctx196608/manifests/run.json"
     active.parent.mkdir(parents=True)
     active.write_text(json.dumps({"code_hash": "prior-v2-hash"}))
     encoded, expected = payload()
     with pytest.raises(ValueError, match="Recorded run code"):
-        apply(repo, drive / "versions/summary-v2", encoded=encoded, expected=expected,
-              run_root=drive / "runs-private", run_version="summary-v2")
+        apply(repo, drive / "versions" / version, encoded=encoded, expected=expected,
+              run_root=drive / "runs-private", run_version=version)
     assert source.read_text() == "old\n"
 
 
-def test_version_cannot_bypass_source_guard_in_legacy_workspace(tmp_path):
+@pytest.mark.parametrize("version", ["summary-v2", "summary-v3"])
+def test_version_cannot_bypass_source_guard_in_legacy_workspace(tmp_path, version):
     encoded, expected = payload()
     tmp_path.joinpath("repo").mkdir()
     with pytest.raises(ValueError, match="isolated|version"):
         apply(tmp_path / "repo", tmp_path / "drive", encoded=encoded, expected=expected,
-              run_root=tmp_path / "drive/runs-private", run_version="summary-v2")
+              run_root=tmp_path / "drive/runs-private", run_version=version)
+
+
+def test_v3_snapshot_preserves_recorded_v2_source_and_results(tmp_path):
+    repo, drive = tmp_path / "repo", tmp_path / "drive"
+    source = repo / "src/context_audit/example.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("old\n")
+    v2 = drive / "runs-private/qwen-pilot-summary-v2-ctx196608/manifests/run.json"
+    v2.parent.mkdir(parents=True)
+    v2.write_text(json.dumps({"code_hash": "synthetic-v2-hash"}))
+    prior_source = drive / "versions/summary-v2/configuration/notebook-source.json"
+    prior_source.parent.mkdir(parents=True)
+    prior_source.write_text(json.dumps({"snapshot_sha256": "synthetic-v2-snapshot"}))
+    old = {v2: v2.read_bytes(), prior_source: prior_source.read_bytes()}
+    encoded, expected = payload()
+    apply(repo, drive / "versions/summary-v3", encoded=encoded, expected=expected,
+          run_root=drive / "runs-private", run_version="summary-v3")
+    assert source.read_text() == "new\n"
+    for path, content in old.items():
+        assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("version", ["summary-v2", "summary-v3"])
+def test_version_source_guard_requires_the_actual_shared_runs_directory(tmp_path, version):
+    repo, drive = tmp_path / "repo", tmp_path / "drive"
+    repo.mkdir()
+    encoded, expected = payload()
+    with pytest.raises(ValueError, match="isolated|version"):
+        apply(repo, drive / "versions" / version, encoded=encoded, expected=expected,
+              run_root=drive / "unrelated-empty-directory", run_version=version)
+    assert list(repo.iterdir()) == []
 
 
 def test_source_symlink_cannot_escape_into_private_storage(tmp_path):

@@ -4,7 +4,7 @@
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gustavogomespl/agent-monitor-context-audit/blob/pilot/notebooks/03_qwen_colab.ipynb)
 
-1. Upload the supplied `dist/qwen_colab_summary_v2_<hash>.ipynb` with
+1. Upload the supplied `dist/qwen_colab_summary_v3_<hash>.ipynb` with
    **File → Upload notebook**, or upload the rebuilt `notebooks/03_qwen_colab.ipynb`.
    The badge above loads the committed notebook from `pilot`; it reflects this
    version only after the rebuilt notebook is published.
@@ -22,19 +22,46 @@ reporting. It saves the report to Drive and releases GPU allocation at the end,
 including setup/error paths. Default Run All without confirmed form fields prints
 the unchecked fields and does not mount Drive or execute an experiment.
 
-## Development amendment: summary-v2
+## Development amendment: summary-v3
 
-The author authorized a new development version after offline diagnosis of saved
-pilot summary failures. Both summary prompts now target 60–80% of the same body
-budget, leaving room for citations and formatting under the unchanged per-example
-cap (at most 1,024 tokens). Both preserve the same evidence priorities. One allowed
-regeneration restates all length, format, schema and citation requirements using
-the original input; neither the rejected candidate nor validator error text is
-fed back. The limit remains two attempts total. No validator is relaxed and no
-oversized summary is silently shortened.
+The author authorized summary-v3 on 2026-09-07 after offline diagnosis of two
+remaining citation-validation failures in the summary-v2 development pilot.
+Qwen now selects `structured_summary_mode="schema_citations_v1"` for structured
+summaries. Constrained JSON-schema decoding produces an internal draft with four
+claim fields, each an array of objects containing required string `text` and a nonempty
+`evidence_event_ids` array. Each selected ID must come from that transcript's visible
+IDs. Both properties are required and extra properties are rejected. The draft has
+no global citation index and does not use a cited-string regular expression.
 
-The hidden setting `EXPERIMENT_VERSION = "summary-v2"` selects an isolated source
-checkout at `/content/agent-monitor-context-audit-summary-v2` and new run identities.
+The renderer rejects empty or blank claim text locally, preserves accepted text
+and appends bracketed citations using
+only the references the model selected for that item. This produces the existing
+four arrays of cited strings and adds `source_event_ids` as their sorted union.
+It neither adds nor removes claims, infers evidence or repairs meaning. The raw
+draft is retained privately alongside the assembled representation.
+
+Summary-v3 pins `xgrammar==0.2.3` for this decoder. Before loading model weights,
+setup compiles and exercises the actual grammar on CPU with independent synthetic
+inputs. Valid claims pass; missing, empty or unknown references fail, including
+when a cited neighboring item is present. This verifies the decoder constraint
+without generating a model response. See [vLLM 0.28.0 structured outputs](https://docs.vllm.ai/en/v0.28.0/features/structured_outputs/).
+
+The final validator remains unchanged: it rejects unknown IDs and uncited claims,
+checks the full five-field representation and measures all serialized JSON,
+including the assembled ID list, against the existing cap of at most 1,024 tokens.
+Both summary conditions retain the generic 60–80% target and the same evidence
+priorities from summary-v2. The raw generation allowance remains 1,600 tokens and
+the limit remains two attempts total. The permitted regeneration uses the original
+input and reinforces the requirements without the rejected candidate, validator
+error text, labels or monitor feedback. No oversized summary is silently shortened.
+
+This changes the full structured-summary intervention, including its decoder and
+deterministic assembly. It does not isolate a causal effect of JSON syntax. Schema
+compliance also does not establish that a claim is faithful to its cited evidence.
+The legacy prompt-only mode remains readable for earlier summary-v2 records.
+
+The hidden setting `EXPERIMENT_VERSION = "summary-v3"` selects an isolated source
+checkout at `/content/agent-monitor-context-audit-summary-v3` and new run identities.
 The pilot starts all 24 evaluation units afresh across the same three development
 pairs and four conditions; it does not reuse the previous pilot's successful or
 failed calls. The model/tokenizer/runtime pins, dataset, opaque IDs, family split,
@@ -43,11 +70,11 @@ configs and reports remain available for comparison. Later reconnects can resume
 this version's own incremental records.
 
 This amendment was motivated by development validation failures, not held-out
-scores. A first version setup stops if the parent workspace is already frozen or
-contains a test run. Existing data-use/rubric confirmations, explicit start and
-development review before test still apply. The new prompts have only offline
-synthetic validation until the authorized Colab pilot is executed; improved live
-coverage or monitoring performance is not established.
+scores. Creating the version stops if a legacy or earlier version workspace is
+already frozen or contains test-run evidence. Existing data-use/rubric confirmations,
+explicit start and development review before test still apply. Implementing the
+schema mode and offline checks do not establish successful GPU execution, improved
+live coverage or better monitoring performance; the authorized pilot must test this.
 
 ## What the output looks like
 
@@ -91,24 +118,26 @@ No public push occurs.
 The default private folder is `My Drive/agent-monitor-context-audit-private`.
 The final cell prints full paths. For each phase:
 
-- `numeric-results/summary-v2/<phase>/public_scores.csv`: sanitized numeric rows.
-- `numeric-results/summary-v2/<phase>/reproduced/findings.md`: report.
-- `numeric-results/summary-v2/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
-- `runs-private/notebook-status/summary-v2/latest.json`: workflow status and output locations.
-- `runs-private/notebook-status/summary-v2/last-error.log`: last full private diagnostic.
-- `runs-private/qwen-<phase>-summary-v2-ctx196608/gpu_sessions/server_logs/`
+- `numeric-results/summary-v3/<phase>/public_scores.csv`: sanitized numeric rows.
+- `numeric-results/summary-v3/<phase>/reproduced/findings.md`: report.
+- `numeric-results/summary-v3/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
+- `runs-private/notebook-status/summary-v3/latest.json`: workflow status and output locations.
+- `runs-private/notebook-status/summary-v3/last-error.log`: last full private diagnostic.
+- `runs-private/qwen-<phase>-summary-v3-ctx196608/gpu_sessions/server_logs/`
   and `runner_logs/`: engine/worker logs when inheriting the saved 196,608-token window.
 
 After a context adjustment, active run directories have a `-ctx<tokens>` suffix.
 The original attempt remains intact. The suffix reflects the actual saved window;
 a workspace without a prior context choice initially has no context suffix.
-Earlier `numeric-results/<phase>` and `qwen-<phase>-ctx<tokens>` artifacts stay
-unchanged. The printed diagnostic paths always point to the selected version.
+Earlier legacy and `summary-v2` numeric results, run directories and source
+workspaces stay unchanged. The printed diagnostic paths identify the selected version.
 
-`versions/summary-v2/` contains this version's configuration, context selection,
+`versions/summary-v3/` contains this version's configuration, context selection,
 source pin, durable Git metadata, source receipts and eventual frozen snapshot.
-On first setup it inherits the parent source pin, context selection and public
-manifests. Reconnects retain its own copies. The parent `configuration/model-pin.json`,
+First setup inherits the available `summary-v2` source pin and context selection,
+falling back to the legacy workspace when absent. Reconnects retain the new version's
+own copies. Source files and Git metadata are isolated from earlier versions.
+The parent `configuration/model-pin.json`,
 `data-private/` and `runs-private/gpu_budget/` remain shared; versioning does not
 copy or reset model pins, dataset IDs, split assignments or GPU accounting.
 
@@ -161,8 +190,8 @@ or a separate patch upload. Changed originals are backed up privately.
 
 All paths and hashes are checked before replacing files. Unknown local edits,
 source symlinks, incompatible recorded scientific code hashes within the selected
-version and differing frozen source are rejected. Only the explicit `summary-v2`
-path scopes the recorded-run guard to that version; the legacy path still protects
+version and differing frozen source are rejected. Only explicit versioned paths
+scope the recorded-run guard to that version; the legacy path still protects
 all recorded runs. Source updates never reset datasets, budget ledgers or results.
 A frozen source snapshot takes precedence. Existing bundle-based workspaces remain
 readable, but a new guided run only needs this notebook.
@@ -247,13 +276,14 @@ exports and diagnostics use the same selected context. A new workspace that firs
 discovers this issue during its pilot can restart once automatically after the
 server shuts down and the remaining time is checked. Later inference failures do
 not trigger context tuning. The endpoint repeats exact token validation before
-generation. Hardware memory fit and long-context inference still need live validation.
+generation. Token feasibility alone does not guarantee hardware memory fit; any
+new context choice still needs an authorized GPU pilot.
 
 To resume the reported failure, upload the rebuilt notebook, keep the current Drive
 folder and `STAGE = pilot`, confirm the form, then select **Run all**. There is no
-context variable to edit and no configuration file to delete. For `summary-v2`,
-the existing parent selection is inherited before startup; it is not recomputed
-from the earlier generation failures.
+context variable to edit and no configuration file to delete. For `summary-v3`,
+the existing summary-v2 selection is inherited when available, otherwise the
+legacy selection; it is not recomputed from earlier generation failures.
 
 ### Model, hardware and sampling
 
@@ -266,8 +296,9 @@ Keep the same hardware across the study when possible and report any changes;
 latency and GPU cost cannot be compared as if hardware were identical.
 
 The author reported PyTorch 2.13.0+cu130, CUDA 13.0 and a passing small BF16 matrix
-multiplication on SM120. That checks basic PyTorch execution only; loading Qwen
-and its hybrid attention kernels still requires the authorized pilot. Keep vLLM's
+multiplication on SM120. That diagnostic checked basic PyTorch execution only;
+later private pilot records reached model generation. The new schema-constrained
+summarization mode still needs its own authorized GPU validation. Keep vLLM's
 automatic attention selection and the existing BF16 configuration.
 
 The only Qwen model is `Qwen/Qwen3.8-27B`, shared by independent monitor and
@@ -276,8 +307,8 @@ versions of vLLM, Torch, Transformers, Tokenizers, Triton and Safetensors are
 preserved and checked across runtimes. The default is BF16, tensor parallelism 1,
 one sequence, an initial 65,536-token context with the pre-scoring recovery above,
 eager execution, chunked prefill,
-text-only loading and no prefix cache or speculative decoding. Context capacity
-is a pilot setting, not a demonstrated GPU result. Full is never truncated.
+text-only loading and no prefix cache or speculative decoding. Record the selected
+context and observed GPU behavior for each version. Full is never truncated.
 
 Body budgets use `/tokenize` without special tokens. Full request counts use the
 same chat template, messages and generation marker as inference. Returned prompt

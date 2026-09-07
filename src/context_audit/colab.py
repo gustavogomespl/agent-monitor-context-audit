@@ -29,7 +29,7 @@ def vllm_command(config: AuditConfig) -> list[str]:
     qwen = config.qwen
     qwen.validate_live()
     url = urlsplit(qwen.base_url)
-    return [
+    command = [
         sys.executable,
         "-m",
         "vllm.entrypoints.openai.api_server",
@@ -69,6 +69,9 @@ def vllm_command(config: AuditConfig) -> list[str]:
         "--default-chat-template-kwargs",
         '{"enable_thinking":false,"preserve_thinking":false}',
     ]
+    if config.structured_summary_mode == "schema_citations_v1":
+        command.extend(["--structured-outputs-config.backend", "xgrammar"])
+    return command
 
 
 def _time_receipt(ledger: BudgetLedger) -> dict:
@@ -509,6 +512,10 @@ def run_colab_experiment(
     if config.qwen.runtime_versions != runtime_versions:
         raise ValueError("Inference packages differ from the saved runtime pin; rerun Colab setup")
     hardware = _hardware()
+    if config.structured_summary_mode == "schema_citations_v1":
+        from context_audit.structured_backend import check_structured_backend
+
+        hardware["structured_outputs"] = check_structured_backend()
     url = urlsplit(config.qwen.base_url)
     # Never accidentally contact a server from another notebook/run.
     try:

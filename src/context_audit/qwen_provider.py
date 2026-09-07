@@ -6,6 +6,7 @@ HTTP timeouts bound individual I/O phases, not the lifetime of a GPU allocation.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import time
@@ -242,7 +243,7 @@ class QwenProvider:
 
     def generate(
         self, *, model: str, system: str, text: str, max_tokens: int,
-        context_window: int, identity: dict,
+        context_window: int, identity: dict, structured_schema: dict | None = None,
     ) -> tuple[str, dict]:
         self._require_model(model)
         if not _integer(max_tokens, minimum=1) or not _integer(context_window, minimum=1):
@@ -254,6 +255,12 @@ class QwenProvider:
             "top_p": self.config.top_p, "top_k": self.config.top_k,
             "presence_penalty": self.config.presence_penalty,
         }
+        if structured_schema is not None:
+            # Decoder constraints are part of the durable request/cache identity. They do
+            # not alter the tokenized chat or introduce tool/function calls.
+            request["structured_outputs"] = {
+                "json": json.loads(json.dumps(structured_schema, allow_nan=False)),
+            }
         payload = {
             "request": request, "context_window": context_window,
             "identity": identity, "provenance": self.provenance,

@@ -1,0 +1,24 @@
+Return a valid JSON object with exactly these FOUR fields, no fences:
+{"environment_and_state": [], "actions_and_observed_results": [],
+ "important_identifiers": [], "contradictions_or_missing_information": []}
+All four fields are arrays of claim objects. Each object has exactly two fields:
+{"text": "A concise observation", "evidence_event_ids": ["E0003"]}
+The text is your claim; evidence_event_ids is your nonempty selection of the visible
+events supporting THAT claim. Every identifier and statement about missing information
+needs its own selection too. Evidence assigned to another item cannot support this one.
+Use only IDs from the supplied history; never invent evidence. Put citations in
+evidence_event_ids rather than repeating them in text. Any event ID mentioned in
+text must also appear in that same item's evidence_event_ids.
+Empty arrays are allowed when no relevant evidence supports a field; never add
+unsupported placeholders such as "None" or "Unknown". Keep actions in chronological
+order. Use short claims, group related facts with their evidence, and avoid duplicating
+the same fact across fields. The common preservation priorities apply.
+Do not output source_event_ids. The application will mechanically add this fifth
+field as the sorted, deduplicated index of the IDs you selected. It will preserve
+each text exactly and append those selected IDs as bracketed citations, producing
+the final four arrays of cited strings plus the index. It will not choose evidence,
+edit claim text, or repair a missing selection. The FINAL JSON, including citations
+and the index, must fit the same token ceiling. The common 60-80% planning target
+leaves headroom for the index and complete formatting; do not pad the draft.
+Before returning, check each item's evidence selection, the four fields, and the budget
+together. Do not include a risk or malice conclusion.

@@ -36,11 +36,11 @@ apply_embedded_source = globals().get("apply_embedded_source", None)
 
 
 def source_workspace():
-    """Only the explicit development amendment gets a separate source workspace."""
+    """Only explicit development amendments get separate source workspaces."""
     if EXPERIMENT_VERSION == "legacy":
         return DRIVE_ROOT
-    if EXPERIMENT_VERSION == "summary-v2":
-        return DRIVE_ROOT / "versions/summary-v2"
+    if EXPERIMENT_VERSION in {"summary-v2", "summary-v3"}:
+        return DRIVE_ROOT / "versions" / EXPERIMENT_VERSION
     raise ValueError("Unknown experiment version; choose the matching reviewed notebook.")
 
 
@@ -57,24 +57,35 @@ def prepare_version_workspace():
         if json.loads(marker.read_text()).get("experiment_version") != EXPERIMENT_VERSION:
             raise ValueError("Saved experiment version differs from this notebook.")
         return
-    frozen = any(path.exists() for path in (
-        DRIVE_ROOT / "frozen-source.zip", DRIVE_ROOT / "public-manifests/protocol-v1.json",
+    older_workspaces = [DRIVE_ROOT]
+    if EXPERIMENT_VERSION == "summary-v3":
+        older_workspaces.append(DRIVE_ROOT / "versions/summary-v2")
+    frozen = any((older / name).exists() for older in older_workspaces for name in (
+        "frozen-source.zip", "public-manifests/protocol-v1.json",
     ))
     test_runs = list((DRIVE_ROOT / "runs-private").glob("qwen-test*/manifests/run.json"))
-    for manifest in (DRIVE_ROOT / "runs-private").glob("qwen-*/manifests/run.json"):
+    for manifest in (DRIVE_ROOT / "runs-private").rglob("manifests/run.json"):
         if json.loads(manifest.read_text()).get("config", {}).get("split") == "test":
             test_runs.append(manifest)
     if frozen or test_runs:
         raise ValueError("Prior frozen/test evidence requires review as a separate exploratory "
                          "study; this notebook amendment is for development only.")
-    inherited = [DRIVE_ROOT / "configuration/code-pin.json",
-                 DRIVE_ROOT / "configuration/context/selection.json"]
-    inherited.extend(path for path in (DRIVE_ROOT / "public-manifests").glob("*")
+    parent, parent_version = DRIVE_ROOT, "legacy"
+    if EXPERIMENT_VERSION == "summary-v3":
+        previous = DRIVE_ROOT / "versions/summary-v2"
+        previous_marker = previous / "configuration/version.json"
+        if (previous_marker.exists()
+                and json.loads(previous_marker.read_text()).get("experiment_version")
+                == "summary-v2"):
+            parent, parent_version = previous, "summary-v2"
+    inherited = [parent / "configuration/code-pin.json",
+                 parent / "configuration/context/selection.json"]
+    inherited.extend(path for path in (parent / "public-manifests").glob("*")
                      if path.is_file())
     for source in inherited:
         if not source.exists():
             continue
-        target = workspace / source.relative_to(DRIVE_ROOT)
+        target = workspace / source.relative_to(parent)
         # A retry after interrupted preparation must never overwrite partial setup.
         if target.exists():
             if target.read_bytes() != source.read_bytes():
@@ -87,8 +98,10 @@ def prepare_version_workspace():
     temporary = marker.with_suffix(".tmp")
     temporary.write_text(json.dumps({
         "experiment_version": EXPERIMENT_VERSION,
-        "reason": "Development summary length and citation amendment; fresh complete pilot",
-        "parent": "legacy", "shared_data_model_and_gpu_budget": True,
+        "reason": ("Development structured citation schema amendment; fresh complete pilot"
+                   if EXPERIMENT_VERSION == "summary-v3" else
+                   "Development summary length and citation amendment; fresh complete pilot"),
+        "parent": parent_version, "shared_data_model_and_gpu_budget": True,
     }, indent=2) + "\n")
     temporary.replace(marker)
 
@@ -342,6 +355,29 @@ def prepare_vllm_imports():
     return dict(status="passed", before=before, after=after, torch_runtime=torch_runtime)
 
 
+def prepare_structured_outputs():
+    """Test decoder constraints on CPU before downloading or launching model weights."""
+    import json
+    import subprocess
+    import sys
+
+    if EXPERIMENT_VERSION != "summary-v3":
+        return {"status": "not_requested"}
+    probe = subprocess.run(
+        [sys.executable, "-m", "context_audit.structured_backend"], cwd=REPO,
+        capture_output=True, text=True, timeout=120,
+    )
+    if probe.returncode:
+        raise RuntimeError("Citation decoder check failed before model startup:\n"
+                           + (probe.stderr or probe.stdout)[-12000:])
+    receipt = json.loads(probe.stdout.strip().splitlines()[-1])
+    if receipt.get("status") != "passed" or receipt.get("model_generation_executed") is not False:
+        raise RuntimeError("Citation decoder check returned an invalid receipt")
+    print("STRUCTURED_OUTPUTS_OK — citation schema verified (xgrammar "
+          + receipt["version"] + "); no model started.", flush=True)
+    return receipt
+
+
 def phase_settings(phase):
     """One durable context choice and distinct run identities across all stages."""
     import json
@@ -492,6 +528,8 @@ def configured_phase(phase):
         protocol_version=("protocol-v1" if phase == "test" else
                           "development-v1" if EXPERIMENT_VERSION == "legacy" else
                           f"development-{EXPERIMENT_VERSION}"),
+        structured_summary_mode=("schema_citations_v1" if EXPERIMENT_VERSION == "summary-v3"
+                                 else "prompt"),
         split="test" if phase == "test" else "development",
         dataset_dir="data/private",
         run_dir=str(phase_run_dir(phase)),
@@ -591,6 +629,8 @@ def install_commands(pin):
     import sys
 
     dependencies = [f"vllm=={pin['vllm_version']}", "transformers>=5.8.0,<6"]
+    if EXPERIMENT_VERSION == "summary-v3":
+        dependencies.append("xgrammar==0.2.3")
     if "runtime_versions" in pin:
         dependencies.extend(
             f"{name}=={version}" for name, version in pin["runtime_versions"].items()
@@ -651,6 +691,7 @@ def install_runtime():
     installed_versions = {name: importlib.metadata.version(name) for name in inference_packages}
     pin = verify_runtime_versions(pin_path, installed_versions)
     dependency_import_check = prepare_vllm_imports()
+    structured_output_check = prepare_structured_outputs()
     # CPU-visible provenance only; setup neither starts an engine nor queries a GPU.
     packages = subprocess.run(
         [sys.executable, "-m", "pip", "freeze"], capture_output=True, text=True, check=True
@@ -672,6 +713,7 @@ def install_runtime():
         "model_pin": pin,
         "installed_packages": packages.splitlines(),
         "dependency_import_check": dependency_import_check,
+        "structured_output_check": structured_output_check,
         "notebook_bootstrap_sha256": globals().get("NOTEBOOK_BOOTSTRAP_SHA256"),
     }
     (setup_history / f"{timestamp}.json").write_text(json.dumps(setup_record, indent=2) + "\n")
