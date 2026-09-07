@@ -469,3 +469,69 @@ or evidence of a successful revised pilot or improved monitoring performance.
 Explicit start/data-use/rubric confirmations and full development before reviewed
 test remain required. No publication, public push or live generation is performed
 by this implementation.
+
+## 2026-09-07: author-authorized summary-v4 compressed-budget amendment
+
+The author supplied private summary-v3 development pilot records with 23 of 24
+evaluation units successful and authorized increasing the compressed maximum to
+2,048 tokens. The remaining structured-summary failure exceeded the 1,024-token
+cap in both assembled attempts: 1,542 tokens in one and 1,124 tokens in the final
+attempt. These development length-validation diagnostics motivated the change;
+held-out scores did not. No benchmark text, private example identifiers,
+annotations or canaries are included in public documentation, prompts or tests.
+
+Summary-v4 uses the common per-example ceiling
+`B_i = min(T_i, max(128, min(2048, floor(0.25 * T_i))))` for `head_tail`,
+`free_summary` and `structured_summary`. Only the maximum rises from 1,024 to
+2,048; the token fraction remains 0.25 and the minimum remains 128. The common
+initial task and monitor policy stay outside the body cap, while all fields,
+citations and omission markers count toward it. Short inputs retain the existing
+identity behavior. `full` remains integral and is never silently truncated.
+
+Both summary conditions receive a 3,200-token raw generation allowance, preserving
+the previous 1,600-to-1,024 ratio to the maximum representation cap. The raw
+allowance is distinct from the final validated representation ceiling. The
+60–80% target, common evidence priorities, two-attempt maximum and accounting of
+both attempts remain unchanged. Monitor output retains its 700-token allowance.
+Persistent failures keep null scores and escalate to review.
+
+The v3 `schema_citations_v1` typed draft, constrained decoding, `xgrammar==0.2.3`
+pin and CPU grammar check, deterministic assembly and final validators remain
+unchanged. The assembled structured JSON, including `source_event_ids`, must fit
+the new per-example cap. Rendering still neither changes claims nor invents
+evidence. Regeneration receives the original input and generic requirements,
+without rejected responses, validator error text, labels or monitor decisions.
+Typed citations do not establish that a claim is faithful to its cited evidence.
+
+The hidden `EXPERIMENT_VERSION="summary-v4"` selects the local source checkout
+`/content/agent-monitor-context-audit-summary-v4` and Drive `versions/summary-v4/`
+for isolated source/configuration provenance, Git metadata and any later freeze.
+First creation inherits the newest valid parent source pin and measured context
+from summary-v3, then summary-v2, then legacy; reconnects retain v4's own records.
+Any earlier frozen workspace or test-run evidence blocks version creation.
+Earlier source, configurations, caches, calls, reports and numeric results remain
+intact and are never reused as new-version responses or mixed into v4 scores.
+
+All 24 pilot units start afresh. With the inherited 196,608-token context, the
+pilot uses `runs-private/qwen-pilot-summary-v4-ctx196608`; outputs go to
+`numeric-results/summary-v4/pilot` and diagnostics to
+`runs-private/notebook-status/summary-v4`. Development configurations identify
+`development-summary-v4`. The original Drive root supplies the same private
+dataset, opaque IDs, family split, model/tokenizer/runtime pins and cumulative
+GPU ledger. The measured context is inherited, not retuned from generation
+failures, and request-token preflight still validates the larger output allowance.
+The 12-hour allowance is shared with all prior versions and is not reset.
+
+This changes the compression intervention across all compressed conditions.
+Larger outputs permit less compression and may increase generation time, monitor
+latency and GPU use; equal caps do not imply equal realized lengths. Earlier pilot
+results document development history and cannot establish v4 performance. Full
+development, author review and the existing explicit test freeze remain required.
+
+Codex implemented this author-requested amendment with parallel AI assistance.
+The notebook is delivered as `dist/qwen_colab_summary_v4_<hash>.ipynb` and embeds
+the amended plan, decision record and operating guide. Offline checks are not a
+guarantee of successful GPU execution, completion within the remaining allowance,
+improved coverage or monitoring quality. Existing start/data-use/rubric
+confirmations remain required. No GPU inference, paid API call, commit, public
+push or publication is performed by this implementation.

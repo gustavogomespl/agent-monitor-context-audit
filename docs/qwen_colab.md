@@ -4,7 +4,7 @@
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gustavogomespl/agent-monitor-context-audit/blob/pilot/notebooks/03_qwen_colab.ipynb)
 
-1. Upload the supplied `dist/qwen_colab_summary_v3_<hash>.ipynb` with
+1. Upload the supplied `dist/qwen_colab_summary_v4_<hash>.ipynb` with
    **File → Upload notebook**, or upload the rebuilt `notebooks/03_qwen_colab.ipynb`.
    The badge above loads the committed notebook from `pilot`; it reflects this
    version only after the rebuilt notebook is published.
@@ -22,7 +22,67 @@ reporting. It saves the report to Drive and releases GPU allocation at the end,
 including setup/error paths. Default Run All without confirmed form fields prints
 the unchecked fields and does not mount Drive or execute an experiment.
 
-## Development amendment: summary-v3
+## Current development amendment: summary-v4
+
+The author authorized summary-v4 on 2026-09-07 after the private summary-v3
+development pilot completed 23 of 24 evaluation units successfully. The remaining
+structured-summary failure was length validation: its final assembled attempt
+measured 1,124 tokens against a 1,024-token cap; the other attempt measured 1,542.
+These development diagnostics, not held-out scores, motivated the change. The
+author requested increasing the compressed-representation maximum to 2,048 tokens.
+
+All three compressed conditions (`head_tail`, `free_summary` and
+`structured_summary`) use the same per-example cap:
+
+`B_i = min(T_i, max(128, min(2048, floor(0.25 * T_i))))`
+
+The token fraction remains 0.25 and the minimum remains 128. The initial task and
+monitor policy remain outside this body budget. Every serialized field and citation
+in a structured summary counts toward the cap. `full` remains the integral
+normalized body; it is never silently truncated. Equal caps do not imply equal
+realized lengths, and short inputs retain the existing identity behavior.
+
+Both summary conditions keep the 60–80% target and common evidence priorities.
+Their raw generation allowance is 3,200 tokens each, preserving the previous
+1,600-to-1,024 ratio between the generation allowance and maximum representation
+cap. This allowance is separate from the final representation limit. There are
+still at most two attempts, with both recorded and charged; monitor output remains
+capped at 700 tokens. Persistent validation failures keep null scores and escalate
+to review.
+
+The v3 typed citation draft, `schema_citations_v1` decoding, XGrammar pin and CPU
+check, deterministic assembly and final validators are retained. No generated
+claims are added, removed or repaired to fit the budget. Regeneration still uses
+the original input and generic requirements, without the rejected response,
+validator error text, labels or monitor decisions. The historical v3 section below
+describes this mechanism and its original, smaller budgets.
+
+The hidden setting `EXPERIMENT_VERSION = "summary-v4"` selects
+`/content/agent-monitor-context-audit-summary-v4` and isolated Drive provenance in
+`versions/summary-v4/`. First setup inherits the newest valid parent source pin
+and measured context in order: summary-v3, summary-v2, then legacy. Reconnects keep
+this version's own records. Creating the version is blocked if any earlier version
+or legacy workspace is frozen or has test-run evidence.
+
+All 24 pilot units start afresh across the same three development pairs and four
+conditions. Earlier successful responses and numeric scores are not reused or
+mixed into v4; old source, configurations, caches and results stay intact. Model,
+tokenizer and runtime pins, private dataset, opaque IDs, family split, measured
+context and the remaining shared 12-hour GPU allowance are retained. Full
+development and an explicit reviewed freeze still precede held-out evaluation.
+
+The larger cap permits less compression and may increase generation time, monitor
+latency and GPU use. It changes the compression intervention; it does not establish
+better coverage, faithful citations or improved monitoring performance. Codex
+implemented this author-requested amendment with parallel AI assistance. Offline
+checks do not guarantee that the revised GPU pilot will succeed or finish within
+the remaining allowance. Existing start, data-use and rubric confirmations apply.
+
+## Historical development amendment: summary-v3
+
+This section records the v3 design and its status when implemented. The v4
+amendment above supersedes its representation and raw generation limits and active
+version paths; the v3 records remain unchanged.
 
 The author authorized summary-v3 on 2026-09-07 after offline diagnosis of two
 remaining citation-validation failures in the summary-v2 development pilot.
@@ -118,25 +178,27 @@ No public push occurs.
 The default private folder is `My Drive/agent-monitor-context-audit-private`.
 The final cell prints full paths. For each phase:
 
-- `numeric-results/summary-v3/<phase>/public_scores.csv`: sanitized numeric rows.
-- `numeric-results/summary-v3/<phase>/reproduced/findings.md`: report.
-- `numeric-results/summary-v3/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
-- `runs-private/notebook-status/summary-v3/latest.json`: workflow status and output locations.
-- `runs-private/notebook-status/summary-v3/last-error.log`: last full private diagnostic.
-- `runs-private/qwen-<phase>-summary-v3-ctx196608/gpu_sessions/server_logs/`
+- `numeric-results/summary-v4/<phase>/public_scores.csv`: sanitized numeric rows.
+- `numeric-results/summary-v4/<phase>/reproduced/findings.md`: report.
+- `numeric-results/summary-v4/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
+- `runs-private/notebook-status/summary-v4/latest.json`: workflow status and output locations.
+- `runs-private/notebook-status/summary-v4/last-error.log`: last full private diagnostic.
+- `runs-private/qwen-<phase>-summary-v4-ctx196608/gpu_sessions/server_logs/`
   and `runner_logs/`: engine/worker logs when inheriting the saved 196,608-token window.
 
 After a context adjustment, active run directories have a `-ctx<tokens>` suffix.
 The original attempt remains intact. The suffix reflects the actual saved window;
 a workspace without a prior context choice initially has no context suffix.
-Earlier legacy and `summary-v2` numeric results, run directories and source
-workspaces stay unchanged. The printed diagnostic paths identify the selected version.
+Earlier legacy, `summary-v2` and `summary-v3` numeric results, run directories and
+source workspaces stay unchanged. The printed diagnostic paths identify the
+selected version.
 
-`versions/summary-v3/` contains this version's configuration, context selection,
+`versions/summary-v4/` contains this version's configuration, context selection,
 source pin, durable Git metadata, source receipts and eventual frozen snapshot.
-First setup inherits the available `summary-v2` source pin and context selection,
-falling back to the legacy workspace when absent. Reconnects retain the new version's
-own copies. Source files and Git metadata are isolated from earlier versions.
+First setup inherits the newest valid parent source pin and context selection from
+`summary-v3`, then `summary-v2`, then the legacy workspace. Reconnects retain the
+new version's own copies. Source files and Git metadata are isolated from earlier
+versions.
 The parent `configuration/model-pin.json`,
 `data-private/` and `runs-private/gpu_budget/` remain shared; versioning does not
 copy or reset model pins, dataset IDs, split assignments or GPU accounting.
@@ -281,9 +343,10 @@ new context choice still needs an authorized GPU pilot.
 
 To resume the reported failure, upload the rebuilt notebook, keep the current Drive
 folder and `STAGE = pilot`, confirm the form, then select **Run all**. There is no
-context variable to edit and no configuration file to delete. For `summary-v3`,
-the existing summary-v2 selection is inherited when available, otherwise the
-legacy selection; it is not recomputed from earlier generation failures.
+context variable to edit and no configuration file to delete. For `summary-v4`,
+the newest valid existing selection is inherited from summary-v3, then summary-v2,
+then legacy; it is not recomputed from earlier generation failures. The larger
+output allowances remain subject to exact request-token preflight validation.
 
 ### Model, hardware and sampling
 
@@ -297,9 +360,10 @@ latency and GPU cost cannot be compared as if hardware were identical.
 
 The author reported PyTorch 2.13.0+cu130, CUDA 13.0 and a passing small BF16 matrix
 multiplication on SM120. That diagnostic checked basic PyTorch execution only;
-later private pilot records reached model generation. The new schema-constrained
-summarization mode still needs its own authorized GPU validation. Keep vLLM's
-automatic attention selection and the existing BF16 configuration.
+later private pilot records reached model generation, including the 23-of-24
+summary-v3 pilot. The revised summary-v4 budgets still need their own authorized
+GPU pilot. Keep vLLM's automatic attention selection and the existing BF16
+configuration.
 
 The only Qwen model is `Qwen/Qwen3.8-27B`, shared by independent monitor and
 summarizer requests. vLLM is pinned to 0.28.0; the exact model/tokenizer SHA and

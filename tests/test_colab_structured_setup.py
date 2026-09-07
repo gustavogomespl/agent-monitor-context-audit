@@ -24,8 +24,9 @@ def test_old_versions_do_not_run_new_grammar_probe(tmp_path, monkeypatch, versio
     assert ns['prepare_structured_outputs']() == {'status': 'not_requested'}
 
 
-def test_probe_runs_before_any_model_load_in_fresh_process(tmp_path, monkeypatch, capsys):
-    ns = bootstrap(tmp_path, 'summary-v3')
+@pytest.mark.parametrize('version', ['summary-v3', 'summary-v4'])
+def test_probe_runs_before_any_model_load_in_fresh_process(tmp_path, monkeypatch, capsys, version):
+    ns = bootstrap(tmp_path, version)
     receipt = {'status': 'passed', 'backend': 'xgrammar', 'version': '0.2.3',
                'accepted_cases': 2, 'rejected_cases': 41, 'model_generation_executed': False}
 
@@ -40,8 +41,9 @@ def test_probe_runs_before_any_model_load_in_fresh_process(tmp_path, monkeypatch
     assert 'STRUCTURED_OUTPUTS_OK' in capsys.readouterr().out
 
 
-def test_probe_failure_stops_setup_without_unconstrained_fallback(tmp_path, monkeypatch):
-    ns = bootstrap(tmp_path, 'summary-v3')
+@pytest.mark.parametrize('version', ['summary-v3', 'summary-v4'])
+def test_probe_failure_stops_setup_without_unconstrained_fallback(tmp_path, monkeypatch, version):
+    ns = bootstrap(tmp_path, version)
     calls = []
 
     def run(command, **kwargs):

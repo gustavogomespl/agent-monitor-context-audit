@@ -1,5 +1,12 @@
 # Agent Monitor Context Audit
 
+> **Current Qwen development version: summary-v4.** Its amendment below raises
+> the common maximum compressed-body cap to 2,048 tokens and the raw generation
+> allowance to 3,200 tokens for both summary conditions. The earlier amendments
+> and original proposal are retained as historical context; v4 supersedes their
+> smaller Qwen budgets. Development validation failures motivated the change;
+> held-out scores did not.
+
 > **Infrastructure amendment — 2026-09-06 (English repository note).** The author
 > requested adapting the experiment to `Qwen/Qwen3.8-27B` on a Colab H100 and
 > creating its notebook. For this execution path, a managed local vLLM endpoint
@@ -80,6 +87,51 @@
 > not held-out performance. No GPU validation of this mode or improved monitoring
 > result is established by its implementation; full development and reviewed test
 > remain separate requirements.
+
+> **Development amendment — summary-v4 (2026-09-07).** The author supplied private
+> summary-v3 pilot results with 23 of 24 evaluation units successful and authorized
+> increasing the maximum compressed-representation budget to 2,048 tokens. The
+> remaining structured-summary failure was an assembled final attempt of 1,124
+> tokens against the 1,024-token cap; its other attempt measured 1,542 tokens.
+> Development length-validation failures motivated the amendment; held-out scores
+> did not. No benchmark text or private example identifiers are included here.
+>
+> For the Qwen path, section 4.2 is superseded by
+> `B_i = min(T_i, max(128, min(2048, floor(0.25 * T_i))))`. This equal per-example
+> ceiling applies to `head_tail`, `free_summary` and `structured_summary`; the
+> token fraction remains 0.25 and the minimum remains 128. Every field and
+> citation in the assembled structured representation counts toward the limit.
+> The common initial task and monitor policy remain outside this body budget.
+> Short-input identity behavior is unchanged, and `full` remains integral without
+> silent truncation. Equal ceilings do not establish equal realized lengths.
+>
+> Both summary conditions retain the 60–80% target and common evidence priorities.
+> Each has a 3,200-token raw generation allowance, preserving the previous
+> 1,600-to-1,024 ratio to the maximum representation cap. There are at most two
+> attempts, with both recorded and charged. Monitor output remains 700 tokens.
+> The summary-v3 typed citation draft, schema-constrained decoding, XGrammar pin
+> and CPU check, deterministic assembly and final validators are unchanged.
+> Regeneration retains the original input and generic constraints; rejected
+> output, validator error text, labels and monitor feedback remain excluded.
+> Persistent failures retain null scores and escalate to review.
+>
+> All 24 pilot units start afresh in isolated `summary-v4` runs, with numeric
+> results under `numeric-results/summary-v4/`. Drive `versions/summary-v4/`
+> isolates source/configuration provenance; first setup inherits the newest valid
+> parent source pin and measured context from summary-v3, then summary-v2, then
+> legacy. Earlier source, configurations, calls, caches and results stay intact
+> and are not mixed into v4. Model/tokenizer/runtime pins, private data, opaque
+> IDs, family split, measured context and the remaining shared 12-hour GPU
+> allowance are retained. Creating v4 is blocked by any earlier frozen workspace
+> or test-run evidence. Full development and explicit reviewed test freezing
+> remain required; this does not rewrite a frozen protocol.
+>
+> The larger ceiling permits less compression and may increase latency and GPU
+> use. It changes the compression intervention and does not establish improved
+> coverage or monitoring quality. Codex implemented this author-requested
+> amendment with parallel AI assistance. Offline verification does not guarantee
+> successful GPU execution or completion within the remaining time allowance.
+> No live inference or publication is performed by the implementation itself.
 
 ## Plano de pesquisa e implementação para o Codex
 

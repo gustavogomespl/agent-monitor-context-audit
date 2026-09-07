@@ -39,7 +39,7 @@ def source_workspace():
     """Only explicit development amendments get separate source workspaces."""
     if EXPERIMENT_VERSION == "legacy":
         return DRIVE_ROOT
-    if EXPERIMENT_VERSION in {"summary-v2", "summary-v3"}:
+    if EXPERIMENT_VERSION in {"summary-v2", "summary-v3", "summary-v4"}:
         return DRIVE_ROOT / "versions" / EXPERIMENT_VERSION
     raise ValueError("Unknown experiment version; choose the matching reviewed notebook.")
 
@@ -57,9 +57,14 @@ def prepare_version_workspace():
         if json.loads(marker.read_text()).get("experiment_version") != EXPERIMENT_VERSION:
             raise ValueError("Saved experiment version differs from this notebook.")
         return
-    older_workspaces = [DRIVE_ROOT]
-    if EXPERIMENT_VERSION == "summary-v3":
-        older_workspaces.append(DRIVE_ROOT / "versions/summary-v2")
+    previous_versions = {
+        "summary-v2": (),
+        "summary-v3": ("summary-v2",),
+        "summary-v4": ("summary-v2", "summary-v3"),
+    }[EXPERIMENT_VERSION]
+    older_workspaces = [DRIVE_ROOT, *(
+        DRIVE_ROOT / "versions" / version for version in previous_versions
+    )]
     frozen = any((older / name).exists() for older in older_workspaces for name in (
         "frozen-source.zip", "public-manifests/protocol-v1.json",
     ))
@@ -71,13 +76,14 @@ def prepare_version_workspace():
         raise ValueError("Prior frozen/test evidence requires review as a separate exploratory "
                          "study; this notebook amendment is for development only.")
     parent, parent_version = DRIVE_ROOT, "legacy"
-    if EXPERIMENT_VERSION == "summary-v3":
-        previous = DRIVE_ROOT / "versions/summary-v2"
+    for version in reversed(previous_versions):
+        previous = DRIVE_ROOT / "versions" / version
         previous_marker = previous / "configuration/version.json"
         if (previous_marker.exists()
                 and json.loads(previous_marker.read_text()).get("experiment_version")
-                == "summary-v2"):
-            parent, parent_version = previous, "summary-v2"
+                == version):
+            parent, parent_version = previous, version
+            break
     inherited = [parent / "configuration/code-pin.json",
                  parent / "configuration/context/selection.json"]
     inherited.extend(path for path in (parent / "public-manifests").glob("*")
@@ -98,7 +104,9 @@ def prepare_version_workspace():
     temporary = marker.with_suffix(".tmp")
     temporary.write_text(json.dumps({
         "experiment_version": EXPERIMENT_VERSION,
-        "reason": ("Development structured citation schema amendment; fresh complete pilot"
+        "reason": ("Development summary cap 2048 amendment; fresh complete pilot"
+                   if EXPERIMENT_VERSION == "summary-v4" else
+                   "Development structured citation schema amendment; fresh complete pilot"
                    if EXPERIMENT_VERSION == "summary-v3" else
                    "Development summary length and citation amendment; fresh complete pilot"),
         "parent": parent_version, "shared_data_model_and_gpu_budget": True,
@@ -361,7 +369,7 @@ def prepare_structured_outputs():
     import subprocess
     import sys
 
-    if EXPERIMENT_VERSION != "summary-v3":
+    if EXPERIMENT_VERSION not in {"summary-v3", "summary-v4"}:
         return {"status": "not_requested"}
     probe = subprocess.run(
         [sys.executable, "-m", "context_audit.structured_backend"], cwd=REPO,
@@ -528,8 +536,12 @@ def configured_phase(phase):
         protocol_version=("protocol-v1" if phase == "test" else
                           "development-v1" if EXPERIMENT_VERSION == "legacy" else
                           f"development-{EXPERIMENT_VERSION}"),
-        structured_summary_mode=("schema_citations_v1" if EXPERIMENT_VERSION == "summary-v3"
-                                 else "prompt"),
+        structured_summary_mode=(
+            "schema_citations_v1" if EXPERIMENT_VERSION in {"summary-v3", "summary-v4"}
+            else "prompt"
+        ),
+        token_maximum=2048 if EXPERIMENT_VERSION == "summary-v4" else 1024,
+        summary_max_tokens=3200 if EXPERIMENT_VERSION == "summary-v4" else 1600,
         split="test" if phase == "test" else "development",
         dataset_dir="data/private",
         run_dir=str(phase_run_dir(phase)),
@@ -629,7 +641,7 @@ def install_commands(pin):
     import sys
 
     dependencies = [f"vllm=={pin['vllm_version']}", "transformers>=5.8.0,<6"]
-    if EXPERIMENT_VERSION == "summary-v3":
+    if EXPERIMENT_VERSION in {"summary-v3", "summary-v4"}:
         dependencies.append("xgrammar==0.2.3")
     if "runtime_versions" in pin:
         dependencies.extend(
