@@ -26,6 +26,41 @@ def _integer(value, *, minimum=0) -> bool:
     return type(value) is int and value >= minimum
 
 
+def _response_metadata(data) -> dict:
+    """Bounded diagnostics only: unknown strings and stop sequences may contain data."""
+    choices = data.get("choices") if isinstance(data, dict) else None
+    choice = (
+        choices[0] if isinstance(choices, list) and len(choices) == 1
+        and isinstance(choices[0], dict) else {}
+    )
+    reason = choice.get("finish_reason")
+    if reason is None:
+        finish_reason = "missing"
+    elif isinstance(reason, str) and reason in (
+        "stop", "length", "content_filter", "tool_calls", "function_call", "error", "abort",
+    ):
+        finish_reason = reason
+    else:
+        finish_reason = "unknown"
+    stop = choice.get("stop_reason")
+    if "stop_reason" not in choice:
+        provider_stop_reason = {"kind": "missing"}
+    elif stop is None:
+        provider_stop_reason = {"kind": "none"}
+    elif _integer(stop) and stop <= 2**31 - 1:
+        provider_stop_reason = {"kind": "token_id", "token_id": stop}
+    elif isinstance(stop, str):
+        provider_stop_reason = {"kind": "string_redacted"}
+    else:
+        provider_stop_reason = {"kind": "invalid"}
+    return {
+        "finish_reason": finish_reason,
+        # Preserve the existing generic stop_reason alias for the finish reason.
+        "stop_reason": finish_reason,
+        "provider_stop_reason": provider_stop_reason,
+    }
+
+
 class QwenProvider:
     """One independent text request at a time; no keys, tools or reasoning retention."""
 
@@ -186,60 +221,87 @@ class QwenProvider:
 
     @staticmethod
     def _response(data: dict, *, count: int, max_tokens: int) -> dict:
-        # Retain only validated text and numeric usage, never the original response.
-        failure = {"status": "invalid_output", "text": "", "usage": {}}
-        if not isinstance(data, dict) or data.get("model") != MODEL:
-            return failure
+        # Capture safe termination metadata before any validation can fail. A token
+        # count equal to max_tokens alone never establishes a length termination.
+        metadata = _response_metadata(data)
+
+        def invalid(cause: str, usage: dict | None = None) -> dict:
+            return {
+                "status": "invalid_output", "text": "", "usage": usage or {},
+                "diagnostic_cause": cause, **metadata,
+            }
+
+        if not isinstance(data, dict):
+            return invalid("invalid_response_type")
+        if data.get("model") != MODEL:
+            return invalid("model_mismatch")
         usage = data.get("usage")
         if not isinstance(usage, dict):
-            return failure
+            return invalid("invalid_usage")
         if any(not _integer(usage.get(k)) for k in (
             "prompt_tokens", "completion_tokens", "total_tokens"
         )):
-            return failure
-        if (
-            usage["prompt_tokens"] != count or usage["completion_tokens"] > max_tokens
-            or usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]
-        ):
-            return failure
+            return invalid("invalid_usage_counts")
+        if usage["prompt_tokens"] != count:
+            return invalid("prompt_token_mismatch")
+        if usage["completion_tokens"] > max_tokens:
+            return invalid("completion_token_limit_exceeded")
+        if usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]:
+            return invalid("usage_total_mismatch")
         details = usage.get("completion_tokens_details")
         if details is not None and (
             not isinstance(details, dict)
             or not _integer(details.get("reasoning_tokens", 0))
-            or details.get("reasoning_tokens", 0) != 0
         ):
-            return failure
+            return invalid("invalid_reasoning_usage")
+        if details is not None and details.get("reasoning_tokens", 0) != 0:
+            return invalid("reasoning_tokens_present")
         cached_tokens = 0
         prompt_details = usage.get("prompt_tokens_details")
         if prompt_details is not None:
             if not isinstance(prompt_details, dict):
-                return failure
+                return invalid("invalid_prompt_token_details")
             cached_tokens = prompt_details.get("cached_tokens", 0)
             if not _integer(cached_tokens) or cached_tokens > count:
-                return failure
+                return invalid("invalid_cached_token_count")
         clean_usage = Usage(
             input_tokens=count, output_tokens=usage["completion_tokens"],
             cache_read_input_tokens=cached_tokens,
         ).model_dump()
         choices = data.get("choices")
         if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
-            return failure
+            return invalid("invalid_choices")
         choice = choices[0]
         message = choice.get("message")
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            return failure
+        if not isinstance(message, dict):
+            return invalid("invalid_message")
+        if message.get("role") != "assistant":
+            return invalid("invalid_message_role")
         reason = choice.get("finish_reason")
         if message.get("refusal") or reason == "content_filter":
-            return {"status": "refusal", "text": "", "usage": clean_usage}
+            return {
+                "status": "refusal", "text": "", "usage": clean_usage, **metadata,
+                "diagnostic_cause": (
+                    "refusal_present" if message.get("refusal") else "content_filter"
+                ),
+            }
         content = message.get("content")
-        if (
-            reason != "stop" or message.get("reasoning") or message.get("reasoning_content")
-            or message.get("thinking") or message.get("tool_calls") or message.get("function_call")
-            or not isinstance(content, str) or not content.strip()
-            or re.search(r"<\s*/?\s*think(?:ing)?\b", content, re.IGNORECASE)
-        ):
-            return {**failure, "usage": clean_usage}
-        return {"status": "ok", "text": content, "usage": clean_usage, "stop_reason": "stop"}
+        if reason != "stop":
+            return invalid("non_stop_finish_reason", clean_usage)
+        if message.get("reasoning") or message.get("reasoning_content") or message.get("thinking"):
+            return invalid("reasoning_content_present", clean_usage)
+        if message.get("tool_calls") or message.get("function_call"):
+            return invalid("tool_call_present", clean_usage)
+        if not isinstance(content, str):
+            return invalid("non_text_content", clean_usage)
+        if not content.strip():
+            return invalid("empty_content", clean_usage)
+        if re.search(r"<\s*/?\s*think(?:ing)?\b", content, re.IGNORECASE):
+            return invalid("thinking_tag_present", clean_usage)
+        return {
+            "status": "ok", "text": content, "usage": clean_usage,
+            "diagnostic_cause": "accepted_text", **metadata,
+        }
 
     def generate(
         self, *, model: str, system: str, text: str, max_tokens: int,
@@ -319,7 +381,10 @@ class QwenProvider:
             try:
                 record.update(self._response(response.json(), count=count, max_tokens=max_tokens))
             except (ValueError, TypeError, AttributeError):
-                record.update(status="invalid_output", text="", error="malformed_response")
+                record.update(
+                    status="invalid_output", text="", error="malformed_response",
+                    diagnostic_cause="malformed_response", **_response_metadata(None),
+                )
         else:
             record.update(status="api_error", error="http_error", http_status=response.status_code)
         # Crash between save and settlement recovers the same response without generation.

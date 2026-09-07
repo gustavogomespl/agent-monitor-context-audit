@@ -59,7 +59,7 @@ def snapshot(directory):
             for p in directory.rglob("*") if p.is_file()}
 
 
-@pytest.fixture(params=["summary-v2", "summary-v3", "summary-v4"])
+@pytest.fixture(params=["summary-v2", "summary-v3", "summary-v4", "summary-v5"])
 def experiment_version(request):
     return request.param
 
@@ -74,7 +74,7 @@ def test_default_version_preserves_legacy_routing_without_creating_a_version(pre
     assert snapshot(previous_study) == before
 
 
-@pytest.mark.parametrize("invalid", ["", "summary-v5", "../outside", "/tmp/outside"])
+@pytest.mark.parametrize("invalid", ["", "summary-v6", "../outside", "/tmp/outside"])
 def test_arbitrary_versions_fail_before_writing_files(previous_study, invalid):
     ns = bootstrap(previous_study, EXPERIMENT_VERSION=invalid)
     before = snapshot(previous_study)
@@ -164,12 +164,17 @@ def test_configuration_routes_each_phase_and_preserves_model_data_and_budget(
     expected_protocol = "protocol-v1" if phase == "test" else f"development-{experiment_version}"
     assert config.protocol_version == expected_protocol
     assert config.structured_summary_mode == (
+        "schema_citations_bounded_v1" if experiment_version == "summary-v5" else
         "schema_citations_v1" if experiment_version in {"summary-v3", "summary-v4"} else "prompt"
     )
-    assert config.token_maximum == (2048 if experiment_version == "summary-v4" else 1024)
-    assert config.summary_max_tokens == (3200 if experiment_version == "summary-v4" else 1600)
+    assert config.token_maximum == (
+        2048 if experiment_version in {"summary-v4", "summary-v5"} else 1024
+    )
+    assert config.summary_max_tokens == (
+        3200 if experiment_version in {"summary-v4", "summary-v5"} else 1600
+    )
     assert config.token_fraction == 0.25
-    assert config.token_minimum == 128
+    assert config.token_minimum == (1024 if experiment_version == "summary-v5" else 128)
     assert config.max_attempts == 2
     assert config.monitor_max_tokens == 700
     assert config.run_dir == f"runs/private/qwen-{name}"
@@ -354,7 +359,9 @@ def test_v3_workflow_status_has_its_own_directory(previous_study):
         assert (root / relative).read_bytes() == contents
 
 
-@pytest.mark.parametrize("version", ["legacy", "summary-v2", "summary-v3", "summary-v4"])
+@pytest.mark.parametrize("version", [
+    "legacy", "summary-v2", "summary-v3", "summary-v4", "summary-v5",
+])
 def test_schema_versions_pin_the_structured_decoder_without_changing_runtime_pin(
     previous_study, version,
 ):
@@ -362,7 +369,7 @@ def test_schema_versions_pin_the_structured_decoder_without_changing_runtime_pin
     pin_path = previous_study / "configuration/model-pin.json"
     before = pin_path.read_bytes()
     engine, _ = ns["install_commands"](json.loads(before))
-    assert ("xgrammar==0.2.3" in engine) is (version in {"summary-v3", "summary-v4"})
+    assert ("xgrammar==0.2.3" in engine) is (version in {"summary-v3", "summary-v4", "summary-v5"})
     assert "vllm==0.28.0" in engine
     assert pin_path.read_bytes() == before
 
@@ -448,3 +455,95 @@ def test_legacy_configuration_retains_original_summary_allowances(previous_study
     assert config.token_maximum == 1024
     assert config.summary_max_tokens == 1600
     assert config.structured_summary_mode == "prompt"
+
+
+def test_v5_inherits_v4_choices_once_and_preserves_prior_artifacts_and_budget(previous_study):
+    root = previous_study
+    for version in ("summary-v2", "summary-v3", "summary-v4"):
+        prior = bootstrap(root, EXPERIMENT_VERSION=version)
+        prior["prepare_version_workspace"]()
+        prior["configured_phase"]("pilot")
+        write_json(root / f"runs-private/qwen-pilot-{version}-ctx196608/manifests/run.json", {
+            "config": {"split": "development"}, "run_id": f"synthetic-{version}",
+        })
+        write_json(root / f"numeric-results/{version}/pilot/metrics.json", {"old_result": True})
+        write_json(root / f"runs-private/notebook-status/{version}/latest.json", {
+            "status": "synthetic_prior_status",
+        })
+    parent = root / "versions/summary-v4"
+    write_json(parent / "configuration/code-pin.json", {"commit": "c" * 40})
+    write_json(parent / "configuration/context/selection.json", {"context_window": 229376})
+    write_json(parent / "public-manifests/families.json", {"families": ["synthetic-family"]})
+    before = snapshot(root)
+    ns = bootstrap(root, EXPERIMENT_VERSION="summary-v5")
+    before_budget = ns["read_budget"](root)
+    ns["prepare_version_workspace"]()
+    version = ns["source_workspace"]()
+    marker = json.loads((version / "configuration/version.json").read_text())
+    assert marker["parent"] == "summary-v4"
+    assert marker["experiment_version"] == "summary-v5"
+    assert ns["phase_settings"]("pilot") == ("pilot-summary-v5-ctx229376", 229376)
+    for relative in ("configuration/code-pin.json", "configuration/context/selection.json",
+                     "public-manifests/inventory.json", "public-manifests/families.json"):
+        assert (version / relative).read_bytes() == (parent / relative).read_bytes()
+    assert not (root / "runs-private/qwen-pilot-summary-v5-ctx229376").exists()
+    assert not (version / "configuration/model-pin.json").exists()
+    assert ns["configured_phase"]("pilot").qwen.model_revision == "b" * 40
+    ns["record_status"]({"status": "synthetic_no_generation"})
+    assert ns["status_directory"]() == root / "runs-private/notebook-status/summary-v5"
+    for relative, contents in before.items():
+        assert (root / relative).read_bytes() == contents
+    assert ns["read_budget"](root) == before_budget
+    inherited = snapshot(version)
+    write_json(parent / "configuration/context/selection.json", {"context_window": 262144})
+    write_json(parent / "configuration/code-pin.json", {"commit": "d" * 40})
+    resumed = bootstrap(root, EXPERIMENT_VERSION="summary-v5")
+    resumed["prepare_version_workspace"]()
+    assert snapshot(version) == inherited
+    assert resumed["phase_settings"]("pilot") == ("pilot-summary-v5-ctx229376", 229376)
+
+
+@pytest.mark.parametrize("valid_versions, expected_parent, expected_window", [
+    (("summary-v2", "summary-v3", "summary-v4"), "summary-v4", 229376),
+    (("summary-v2", "summary-v3"), "summary-v3", 212992),
+    (("summary-v2",), "summary-v2", 180224),
+    ((), "legacy", 196608),
+])
+def test_v5_uses_newest_valid_parent(
+    previous_study, valid_versions, expected_parent, expected_window,
+):
+    root = previous_study
+    for version, window in (("summary-v2", 180224), ("summary-v3", 212992),
+                            ("summary-v4", 229376)):
+        parent = root / "versions" / version
+        write_json(parent / "configuration/version.json", {
+            "experiment_version": version if version in valid_versions else "unrecognized-version",
+        })
+        write_json(parent / "configuration/context/selection.json", {"context_window": window})
+    ns = bootstrap(root, EXPERIMENT_VERSION="summary-v5")
+    ns["prepare_version_workspace"]()
+    actual = json.loads((ns["source_workspace"]() / "configuration/version.json").read_text())
+    assert actual["parent"] == expected_parent
+    assert ns["phase_settings"]("pilot")[1] == expected_window
+
+
+@pytest.mark.parametrize("marker", [
+    "versions/summary-v2/frozen-source.zip",
+    "versions/summary-v2/public-manifests/protocol-v1.json",
+    "versions/summary-v3/frozen-source.zip",
+    "versions/summary-v3/public-manifests/protocol-v1.json",
+    "versions/summary-v4/frozen-source.zip",
+    "versions/summary-v4/public-manifests/protocol-v1.json",
+    "runs-private/qwen-test-summary-v2-ctx196608/manifests/run.json",
+    "runs-private/qwen-test-summary-v3-ctx196608/manifests/run.json",
+    "runs-private/qwen-test-summary-v4-ctx196608/manifests/run.json",
+    "runs-private/custom-test-attempt/manifests/run.json",
+])
+def test_v5_rejects_any_older_freeze_or_test_evidence(previous_study, marker):
+    root = previous_study
+    write_json(root / marker, {"config": {"split": "test"}})
+    before = snapshot(root)
+    ns = bootstrap(root, EXPERIMENT_VERSION="summary-v5")
+    with pytest.raises(ValueError, match="Prior frozen/test evidence"):
+        ns["prepare_version_workspace"]()
+    assert snapshot(root) == before

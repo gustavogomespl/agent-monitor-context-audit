@@ -157,22 +157,30 @@ def test_full_context_overflow_never_generates_or_reserves(tmp_path, monkeypatch
     assert all(r.url.path != "/v1/chat/completions" for r, _ in requests)
 
 
-@pytest.mark.parametrize("mutation,error_status", [
-    ({"reasoning": "PRIVATE-THINKING-MUST-NOT-PERSIST"}, "invalid_output"),
-    ({"reasoning_content": "PRIVATE-THINKING-MUST-NOT-PERSIST"}, "invalid_output"),
-    ({"content": "<think>PRIVATE-THINKING-MUST-NOT-PERSIST</think>answer"}, "invalid_output"),
-    ({"tool_calls": [{"function": {"name": "independent_tool"}}]}, "invalid_output"),
-    ({"refusal": "PRIVATE-THINKING-MUST-NOT-PERSIST", "content": None}, "refusal"),
-    ({"content": [{"type": "text", "text": "unexpected block"}]}, "invalid_output"),
+@pytest.mark.parametrize("mutation,error_status,cause", [
+    ({"reasoning": "PRIVATE-THINKING-MUST-NOT-PERSIST"},
+     "invalid_output", "reasoning_content_present"),
+    ({"reasoning_content": "PRIVATE-THINKING-MUST-NOT-PERSIST"},
+     "invalid_output", "reasoning_content_present"),
+    ({"content": "<think>PRIVATE-THINKING-MUST-NOT-PERSIST</think>answer"},
+     "invalid_output", "thinking_tag_present"),
+    ({"tool_calls": [{"function": {"name": "independent_tool"}}]},
+     "invalid_output", "tool_call_present"),
+    ({"refusal": "PRIVATE-THINKING-MUST-NOT-PERSIST", "content": None},
+     "refusal", "refusal_present"),
+    ({"content": [{"type": "text", "text": "unexpected block"}]},
+     "invalid_output", "non_text_content"),
 ])
 def test_non_text_and_thinking_responses_are_failed_and_not_retained(
-    tmp_path, monkeypatch, mutation, error_status
+    tmp_path, monkeypatch, mutation, error_status, cause
 ):
     body = response_body()
     body["choices"][0]["message"].update(mutation)
     provider, store, ledger, _ = setup_provider(tmp_path, monkeypatch, body=body)
     key, record = generate(provider)
     assert record["status"] == error_status and record["text"] == ""
+    assert record["diagnostic_cause"] == cause
+    assert record["finish_reason"] == record["stop_reason"] == "stop"
     assert key in ledger.settled
     assert "PRIVATE-THINKING-MUST-NOT-PERSIST" not in store.path("calls", key).read_text()
 
@@ -356,3 +364,106 @@ def test_returned_model_and_prompt_count_mismatch_fail_closed(tmp_path, monkeypa
     body["model"] = "substituted-model"
     other, _, _, _ = setup_provider(tmp_path / "other", monkeypatch, body=body)
     assert generate(other)[1]["status"] == "invalid_output"
+
+
+@pytest.mark.parametrize("finish_reason,status,cause", [
+    ("stop", "ok", "accepted_text"),
+    ("length", "invalid_output", "non_stop_finish_reason"),
+    ("content_filter", "refusal", "content_filter"),
+])
+def test_finish_and_numeric_stop_metadata_survive_response_validation(
+    tmp_path, monkeypatch, finish_reason, status, cause
+):
+    body = response_body()
+    body["choices"][0].update(finish_reason=finish_reason, stop_reason=151645)
+    provider, store, ledger, _ = setup_provider(tmp_path, monkeypatch, body=body)
+    key, record = generate(provider)
+    assert record["status"] == status
+    assert record["diagnostic_cause"] == cause
+    assert record["finish_reason"] == record["stop_reason"] == finish_reason
+    assert record["provider_stop_reason"] == {"kind": "token_id", "token_id": 151645}
+    assert record["usage"]["output_tokens"] == 7
+    assert record["text"] == ("Observed result [E0003]." if status == "ok" else "")
+    assert store.get("calls", key) == record and key in ledger.settled
+
+
+@pytest.mark.parametrize("finish_reason,want_reason,cause", [
+    ("stop", "stop", "empty_content"),
+    ("length", "length", "non_stop_finish_reason"),
+    (None, "missing", "non_stop_finish_reason"),
+])
+def test_output_at_token_cap_does_not_infer_a_missing_length_finish_reason(
+    tmp_path, monkeypatch, finish_reason, want_reason, cause
+):
+    body = response_body()
+    body["choices"][0]["finish_reason"] = finish_reason
+    body["choices"][0]["message"]["content"] = " "
+    body["usage"].update(completion_tokens=3200, total_tokens=3220)
+    provider, _, _, _ = setup_provider(tmp_path, monkeypatch, body=body)
+    _, record = generate(provider, max_tokens=3200)
+    assert record["status"] == "invalid_output" and record["text"] == ""
+    assert record["usage"]["output_tokens"] == 3200
+    assert record["finish_reason"] == want_reason
+    assert record["diagnostic_cause"] == cause
+
+
+@pytest.mark.parametrize("stop_reason,want", [
+    (None, {"kind": "none"}),
+    ("PRIVATE-STOP-TEXT", {"kind": "string_redacted"}),
+    (True, {"kind": "invalid"}),
+    (-1, {"kind": "invalid"}),
+    (2**63, {"kind": "invalid"}),
+    ({"reasoning": "PRIVATE-STOP-TEXT"}, {"kind": "invalid"}),
+])
+def test_unsafe_finish_and_stop_metadata_are_never_retained(
+    tmp_path, monkeypatch, stop_reason, want
+):
+    body = response_body()
+    body["choices"][0].update(
+        finish_reason={"reasoning": "PRIVATE-FINISH-TEXT"}, stop_reason=stop_reason,
+    )
+    provider, store, _, _ = setup_provider(tmp_path, monkeypatch, body=body)
+    key, record = generate(provider)
+    assert record["status"] == "invalid_output" and record["text"] == ""
+    assert record["finish_reason"] == record["stop_reason"] == "unknown"
+    assert record["provider_stop_reason"] == want
+    assert record["diagnostic_cause"] == "non_stop_finish_reason"
+    retained = store.path("calls", key).read_text()
+    assert "PRIVATE-FINISH-TEXT" not in retained and "PRIVATE-STOP-TEXT" not in retained
+
+
+@pytest.mark.parametrize("mutation,cause", [
+    ({"model": "PRIVATE-UNEXPECTED-MODEL"}, "model_mismatch"),
+    ({"usage": None}, "invalid_usage"),
+    ({"usage": {"prompt_tokens": 20, "completion_tokens": True, "total_tokens": 21}},
+     "invalid_usage_counts"),
+    ({"usage": {"prompt_tokens": 20, "completion_tokens": 7, "total_tokens": 999}},
+     "usage_total_mismatch"),
+])
+def test_early_rejections_keep_safe_finish_metadata_without_invalid_usage(
+    tmp_path, monkeypatch, mutation, cause
+):
+    body = response_body()
+    body.update(mutation)
+    body["choices"][0]["finish_reason"] = "length"
+    provider, store, _, _ = setup_provider(tmp_path, monkeypatch, body=body)
+    key, record = generate(provider)
+    assert record["status"] == "invalid_output" and record["text"] == ""
+    assert record["usage"] == {} and record["diagnostic_cause"] == cause
+    assert record["finish_reason"] == "length"
+    assert record["provider_stop_reason"] == {"kind": "missing"}
+    assert "PRIVATE-UNEXPECTED-MODEL" not in store.path("calls", key).read_text()
+
+
+def test_malformed_json_has_explicit_response_diagnostic(tmp_path, monkeypatch):
+    def handler(request, _):
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(200, text="PRIVATE-MALFORMED-RESPONSE")
+
+    provider, store, _, _ = setup_provider(tmp_path, monkeypatch, handler=handler)
+    key, record = generate(provider)
+    assert record["status"] == "invalid_output"
+    assert record["diagnostic_cause"] == "malformed_response"
+    assert record["finish_reason"] == record["stop_reason"] == "missing"
+    assert record["provider_stop_reason"] == {"kind": "missing"}
+    assert "PRIVATE-MALFORMED-RESPONSE" not in store.path("calls", key).read_text()

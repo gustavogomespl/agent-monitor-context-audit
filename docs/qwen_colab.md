@@ -4,7 +4,7 @@
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gustavogomespl/agent-monitor-context-audit/blob/pilot/notebooks/03_qwen_colab.ipynb)
 
-1. Upload the supplied `dist/qwen_colab_summary_v4_<hash>.ipynb` with
+1. Upload the supplied `dist/qwen_colab_summary_v5_<hash>.ipynb` with
    **File → Upload notebook**, or upload the rebuilt `notebooks/03_qwen_colab.ipynb`.
    The badge above loads the committed notebook from `pilot`; it reflects this
    version only after the rebuilt notebook is published.
@@ -22,7 +22,58 @@ reporting. It saves the report to Drive and releases GPU allocation at the end,
 including setup/error paths. Default Run All without confirmed form fields prints
 the unchecked fields and does not mount Drive or execute an experiment.
 
-## Current development amendment: summary-v4
+## Current development amendment: summary-v5
+
+Use the supplied new notebook, keep **STAGE = pilot** and the existing Drive
+workspace, confirm the three initial checkboxes, then select **Run all**. The
+header must show `Experiment: summary-v5`. Uploading the notebook is sufficient;
+manual source patches and branch changes are unnecessary. All 24 pilot units are
+new v5 calls. After a complete pilot, review its private report before selecting
+development. A complete pilot is not a completed study.
+
+The common body ceiling is
+`B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))` for all three compressed
+conditions. The higher minimum gives short histories more space; bodies of at most
+1,024 tokens remain complete without generating a summary. The maximum remains
+2,048, both raw summary allowances remain 3,200, and `full` remains integral.
+
+Structured generation now uses `schema_citations_bounded_v1`: at most two claims
+per field, two references per claim and `floor(B_i / 4)` JSON text units per claim.
+This means 256 units at a 1,024-token budget and 512 at 2,048. A literal character
+or JSON escape is one unit; an escaped surrogate pair is two. The pinned decoder
+enforces these bounds while producing the draft. It supports escaped quotes,
+backslashes and Unicode, and is checked on CPU before model weights load.
+The string pattern depends on XGrammar 0.2.3's serialized-string semantics;
+it is not a portable substitute for a generic decoded-string schema validator.
+
+These structural limits reduce available output space; they do not guarantee that
+the final representation fits its exact token ceiling or preserves all useful
+evidence. The final counter/validator remains authoritative. Assembly never cuts
+claims or changes their wording. Both attempts are recorded; persistent failures
+remain null and stop advancement. The free-summary decoder, evidence priorities,
+monitor rubric and retry-input policy remain unchanged.
+
+New private call records retain `finish_reason`, `provider_stop_reason` and
+`diagnostic_cause` even when an output is invalid. The existing `stop_reason` alias
+also records the finish category. Raw stop strings are redacted. `length` explicitly
+identifies a reported length stop; a completion count equal to the allowance alone
+does not. Old cached responses keep their original diagnostics.
+
+Drive paths are `versions/summary-v5/`, `runs-private/qwen-pilot-summary-v5-ctx196608/`,
+`numeric-results/summary-v5/pilot/` and `runs-private/notebook-status/summary-v5/`
+when inheriting the measured 196,608-token window. The report is
+`numeric-results/summary-v5/pilot/reproduced/findings.md`. Existing data, IDs,
+family split, model/runtime pins, measured context and the remaining cumulative
+12-hour budget are retained; prior results are preserved. First setup prefers
+v4 provenance, then v3, v2 and legacy. Any earlier freeze or test evidence blocks
+creation. V4 pilot/development scores cannot be reused as v5 results.
+
+The author authorized this exploratory version after v4 development length/output
+failures. It has offline synthetic verification; GPU success and monitoring
+performance require the new run. See the [v5 protocol amendment](../research_plan.md)
+and [decision record](decisions.md) for the scientific scope and AI assistance.
+
+## Historical development amendment: summary-v4
 
 The author authorized summary-v4 on 2026-09-07 after the private summary-v3
 development pilot completed 23 of 24 evaluation units successfully. The remaining

@@ -535,3 +535,65 @@ guarantee of successful GPU execution, completion within the remaining allowance
 improved coverage or monitoring quality. Existing start/data-use/rubric
 confirmations remain required. No GPU inference, paid API call, commit, public
 push or publication is performed by this implementation.
+
+## 2026-09-07: author-authorized summary-v5 bounded drafts and short-input budget
+
+Private v4 development completed 61 of 64 units. Two structured outputs exceeded
+their final budgets; another invalid response used its full raw output allowance
+without a retained finish reason. The author authorized three operational changes:
+control structured draft length, revise the short-input allowance and preserve
+safe termination diagnostics. These development failures motivate v5; held-out
+scores do not. No historical missing reason is reconstructed as truncation.
+
+The common body ceiling becomes
+`B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`. All three compressed
+conditions receive that ceiling. Bodies at or below 1,024 tokens use the full
+body without summary calls, extending the existing identity rule. The raw summary
+allowance remains 3,200 for both summaries, monitor output remains 700, and both
+summary attempts retain the original input, common evidence priorities and
+60–80% target. No rejected output, validation error, label or monitor decision
+is supplied as retry feedback.
+
+The structured mode is `schema_citations_bounded_v1`: at most two claim objects
+per field, at most two selected references per object, and `floor(B_i / 4)`
+JSON text units per claim. This reserves space structurally across the four
+fields instead of relying on the length instruction alone. A literal Unicode
+character or JSON escape is one unit, with escaped surrogate pairs using two.
+The explicit escape-safe pattern is specific to XGrammar 0.2.3's serialized
+string matching. Its `minLength`/`maxLength` implementation does not preserve
+valid escaped strings, so those keywords are not used. The production schema is
+compiled and exercised at the minimum/maximum budgets on CPU before model startup.
+See the [pinned converter source](https://github.com/mlc-ai/xgrammar/blob/v0.2.3/cpp/json_schema_converter.cc)
+and [vLLM structured output interface](https://docs.vllm.ai/en/v0.28.0/features/structured_outputs/).
+
+Structural bounds do not guarantee an exact token count. Local validation checks
+original serialized text units and rejects excess claims/references or decoded
+text length; the unchanged final validator
+counts all assembled fields/citations against the exact token ceiling. Assembly
+preserves claim text and only indexes model-selected evidence. No claim is dropped,
+sliced or repaired. This bounded intervention may omit evidence and must be
+evaluated as a complete method, not as a causal JSON-format effect. Free-summary
+decoding and the monitor rubric are unchanged. Persistent failures remain null
+and escalate after at most two attempts.
+
+New private call records preserve allowlisted `finish_reason`, the existing
+`stop_reason` alias, bounded `provider_stop_reason` metadata, and categorical
+`diagnostic_cause`. Raw stop strings are redacted and no reasoning/tool response
+content is retained. Usage equal to the raw allowance alone does not imply a
+reported length termination. Existing cached records remain unchanged.
+
+All 24 pilot units are fresh in isolated summary-v5 calls/configs/results. First
+setup inherits v4, then v3, v2 or legacy source/context provenance. Existing model,
+runtime, data, opaque IDs, family split, context window, source pins and remaining
+shared 12-hour ledger survive. Earlier caches are not reused as new responses;
+earlier results are not overwritten. Freeze/test evidence in any prior version
+blocks version creation. Full development and explicit reviewed test freezing
+remain necessary.
+
+Codex implemented this amendment with parallel AI assistance. Validation uses
+independent synthetic fixtures, actual CPU grammar checks and private offline
+migration of saved control artifacts. No benchmark content is added to tests or
+public files. These checks are not real v5 inference, evidence of improved scores,
+or a guarantee of GPU completion. Delivery is
+`dist/qwen_colab_summary_v5_<hash>.ipynb`, with empty execution outputs. No live
+generation, commit, public push or publication is performed by this change.

@@ -1,11 +1,10 @@
 # Agent Monitor Context Audit
 
-> **Current Qwen development version: summary-v4.** Its amendment below raises
-> the common maximum compressed-body cap to 2,048 tokens and the raw generation
-> allowance to 3,200 tokens for both summary conditions. The earlier amendments
-> and original proposal are retained as historical context; v4 supersedes their
-> smaller Qwen budgets. Development validation failures motivated the change;
-> held-out scores did not.
+> **Current Qwen development version: summary-v5.** Its amendment below adds
+> bounded structured drafts, a common 1,024-token minimum with the existing
+> 2,048-token maximum, and safe termination diagnostics. Earlier amendments and
+> the original proposal remain historical context. Development validation failures
+> motivated the change; held-out scores did not. The new GPU run is pending.
 
 > **Infrastructure amendment — 2026-09-06 (English repository note).** The author
 > requested adapting the experiment to `Qwen/Qwen3.8-27B` on a Colab H100 and
@@ -132,6 +131,60 @@
 > amendment with parallel AI assistance. Offline verification does not guarantee
 > successful GPU execution or completion within the remaining time allowance.
 > No live inference or publication is performed by the implementation itself.
+
+> **Development amendment — summary-v5 (2026-09-07).** The author supplied v4
+> development artifacts with 61 of 64 evaluation units successful and authorized
+> controlling structured-summary length, revising the short-input budget and
+> retaining provider termination reasons. Two final structured summaries exceeded
+> their per-example caps; another response was invalid with completion usage equal
+> to its raw allowance. The historical response omitted its termination reason,
+> so that last observation does not establish truncation. These operational
+> development diagnostics, not held-out performance, motivate this amendment.
+>
+> The common compressed-body rule is now
+> `B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`. It applies equally to
+> head/tail, free summaries and structured summaries. Bodies of at most 1,024
+> tokens use the complete body with no summary generation, extending the existing
+> short-input identity rule. Full history remains integral. Both summary conditions
+> retain the 3,200-token raw allowance, 60–80% target and maximum of two attempts;
+> the monitor allowance remains 700 tokens.
+>
+> `schema_citations_bounded_v1` retains the v3 typed citation draft and adds decoder
+> limits: at most two claims in each of the four fields, at most two selected
+> event references per claim, and at most `floor(B_i / 4)` JSON text units per
+> claim (256–512 for compressed bodies). A literal Unicode character or JSON
+> escape is one unit; an escaped surrogate pair is two. An explicit JSON-string
+> pattern preserves quotes, backslashes and Unicode under pinned XGrammar 0.2.3;
+> its serialized-string interpretation is decoder-specific and must not be
+> assumed for another JSON Schema validator. A CPU compiler/matcher preflight
+> tests the actual bounds and invalid neighboring items before weights load.
+>
+> These are structural generation bounds, not a guaranteed final token bound.
+> Local assembly additionally checks the original text's serialized units and
+> rejects excessive claims, references and decoded text length. The exact
+> monitor-token counter still validates all five assembled
+> fields and citations against `B_i`. No generated claim is dropped, sliced or
+> rewritten to fit. The model selects evidence and writes within the constraints;
+> empty fields remain possible when unsupported. This narrows the structured
+> intervention and may omit relevant evidence; schema validity does not establish
+> faithfulness. The free-summary decoder and monitor rubric are unchanged.
+>
+> Safe private provider diagnostics now preserve allowlisted finish reasons,
+> bounded stop-token metadata and categorical validation causes, including invalid
+> responses. Raw stop strings, reasoning and tool content are not retained. Missing
+> historical reasons are not reconstructed. Failed outputs retain null scores and
+> escalate; retry input remains the original history plus generic requirements,
+> without rejected drafts, validator error text, labels or monitor feedback.
+>
+> All 24 pilot units start afresh in `summary-v5`; full development and explicit
+> reviewed freezing still precede test. The new source workspace inherits the
+> newest valid v4, v3, v2 or legacy source pin and measured context while retaining
+> the same data, family split, model/runtime pins and remaining shared 12-hour
+> ledger. Prior source, calls, caches, scores and ledgers are not overwritten or
+> reused as new-version responses. An earlier freeze or test run blocks creation.
+> Codex implemented this author-requested exploratory amendment with parallel AI
+> assistance and independent synthetic checks. Offline validation is not evidence
+> of successful v5 inference, better coverage or improved monitoring quality.
 
 ## Plano de pesquisa e implementação para o Codex
 

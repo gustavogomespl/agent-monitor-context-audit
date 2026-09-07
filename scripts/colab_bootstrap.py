@@ -39,7 +39,7 @@ def source_workspace():
     """Only explicit development amendments get separate source workspaces."""
     if EXPERIMENT_VERSION == "legacy":
         return DRIVE_ROOT
-    if EXPERIMENT_VERSION in {"summary-v2", "summary-v3", "summary-v4"}:
+    if EXPERIMENT_VERSION in {"summary-v2", "summary-v3", "summary-v4", "summary-v5"}:
         return DRIVE_ROOT / "versions" / EXPERIMENT_VERSION
     raise ValueError("Unknown experiment version; choose the matching reviewed notebook.")
 
@@ -61,6 +61,7 @@ def prepare_version_workspace():
         "summary-v2": (),
         "summary-v3": ("summary-v2",),
         "summary-v4": ("summary-v2", "summary-v3"),
+        "summary-v5": ("summary-v2", "summary-v3", "summary-v4"),
     }[EXPERIMENT_VERSION]
     older_workspaces = [DRIVE_ROOT, *(
         DRIVE_ROOT / "versions" / version for version in previous_versions
@@ -104,7 +105,10 @@ def prepare_version_workspace():
     temporary = marker.with_suffix(".tmp")
     temporary.write_text(json.dumps({
         "experiment_version": EXPERIMENT_VERSION,
-        "reason": ("Development summary cap 2048 amendment; fresh complete pilot"
+        "reason": ("Development summary floor 1024 and bounded citation schema amendment; "
+                   "fresh complete pilot"
+                   if EXPERIMENT_VERSION == "summary-v5" else
+                   "Development summary cap 2048 amendment; fresh complete pilot"
                    if EXPERIMENT_VERSION == "summary-v4" else
                    "Development structured citation schema amendment; fresh complete pilot"
                    if EXPERIMENT_VERSION == "summary-v3" else
@@ -369,7 +373,7 @@ def prepare_structured_outputs():
     import subprocess
     import sys
 
-    if EXPERIMENT_VERSION not in {"summary-v3", "summary-v4"}:
+    if EXPERIMENT_VERSION not in {"summary-v3", "summary-v4", "summary-v5"}:
         return {"status": "not_requested"}
     probe = subprocess.run(
         [sys.executable, "-m", "context_audit.structured_backend"], cwd=REPO,
@@ -537,11 +541,13 @@ def configured_phase(phase):
                           "development-v1" if EXPERIMENT_VERSION == "legacy" else
                           f"development-{EXPERIMENT_VERSION}"),
         structured_summary_mode=(
+            "schema_citations_bounded_v1" if EXPERIMENT_VERSION == "summary-v5" else
             "schema_citations_v1" if EXPERIMENT_VERSION in {"summary-v3", "summary-v4"}
             else "prompt"
         ),
-        token_maximum=2048 if EXPERIMENT_VERSION == "summary-v4" else 1024,
-        summary_max_tokens=3200 if EXPERIMENT_VERSION == "summary-v4" else 1600,
+        token_minimum=1024 if EXPERIMENT_VERSION == "summary-v5" else 128,
+        token_maximum=2048 if EXPERIMENT_VERSION in {"summary-v4", "summary-v5"} else 1024,
+        summary_max_tokens=3200 if EXPERIMENT_VERSION in {"summary-v4", "summary-v5"} else 1600,
         split="test" if phase == "test" else "development",
         dataset_dir="data/private",
         run_dir=str(phase_run_dir(phase)),
@@ -641,7 +647,7 @@ def install_commands(pin):
     import sys
 
     dependencies = [f"vllm=={pin['vllm_version']}", "transformers>=5.8.0,<6"]
-    if EXPERIMENT_VERSION in {"summary-v3", "summary-v4"}:
+    if EXPERIMENT_VERSION in {"summary-v3", "summary-v4", "summary-v5"}:
         dependencies.append("xgrammar==0.2.3")
     if "runtime_versions" in pin:
         dependencies.extend(

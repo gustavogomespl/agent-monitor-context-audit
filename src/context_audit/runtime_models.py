@@ -132,7 +132,9 @@ class AuditConfig(StrictModel):
     summarizer_context_window: int | None = Field(default=None, gt=0)
     monitor_max_tokens: int = Field(default=700, gt=0)
     summary_max_tokens: int = Field(default=1600, gt=0)
-    structured_summary_mode: Literal["prompt", "schema_citations_v1"] = "prompt"
+    structured_summary_mode: Literal[
+        "prompt", "schema_citations_v1", "schema_citations_bounded_v1",
+    ] = "prompt"
     token_fraction: float = Field(default=0.25, gt=0, le=1)
     token_minimum: int = Field(default=128, gt=0)
     token_maximum: int = Field(default=1024, gt=0)

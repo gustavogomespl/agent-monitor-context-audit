@@ -41,6 +41,7 @@ from context_audit.schemas import EvaluationLabel, TranscriptInput
 from context_audit.storage import PrivateStore, digest
 from context_audit.structured_summary import (
     assemble_structured_summary,
+    draft_limits,
     structured_summary_schema,
 )
 
@@ -75,7 +76,7 @@ def prompts(config: AuditConfig) -> dict[str, str]:
     names = {name: name for name in (
         "monitor", "summary_common", "summary_free", "summary_structured"
     )}
-    if config.structured_summary_mode == "schema_citations_v1":
+    if config.structured_summary_mode != "prompt":
         names["summary_structured"] = "summary_structured_schema"
     return {
         name: (Path(config.prompt_dir) / f"{filename}.txt").read_text()
@@ -87,7 +88,9 @@ def build_monitor_prompt(transcript: TranscriptInput, representation_text: str) 
     return render_task_header(transcript) + "\n<history>\n" + representation_text + "\n</history>"
 
 
-def _summary_request(transcript, body: str, budget: int, *, regenerate: bool = False) -> str:
+def _summary_request(
+    transcript, body: str, budget: int, *, regenerate: bool = False, bounded: bool = False,
+) -> str:
     """Use one label-free contract for generation and exact context preflight."""
     request = (
         f"Token ceiling: {budget}, counted in the monitor model token unit.\n"
@@ -95,6 +98,18 @@ def _summary_request(transcript, body: str, budget: int, *, regenerate: bool = F
         "(60-80% of the ceiling); shorter faithful summaries are valid. "
         "All citations and formatting count toward the ceiling.\n"
     )
+    if bounded:
+        limits = draft_limits(budget)
+        request += (
+            f"Decoder limits: at most {limits['claims_per_field']} claim objects per field, "
+            f"at most {limits['references_per_claim']} visible evidence IDs per claim, "
+            f"and at most {limits['text_units']} JSON text units per claim. "
+            "A literal Unicode character or JSON escape counts as one text unit; "
+            "an escaped surrogate pair counts as two. Write concise, complete claims "
+            "within these limits and prioritize the common preservation requirements. "
+            "Do not pad empty fields or split one claim to evade a limit. "
+            "These structural limits do not replace the final token ceiling.\n"
+        )
     if regenerate:
         request += (
             "Regenerate once from the original history. Satisfy ALL constraints together: "
@@ -126,6 +141,8 @@ _SUMMARY_VALIDATION_REASONS = {
     "Structured draft claim fields do not match schema": "draft_claim_fields_mismatch",
     "Structured draft claims require nonempty text": "empty_draft_claim",
     "Claim text references event IDs not selected for this item": "unassigned_claim_event_id",
+    "Structured bounded draft limits exceeded": "draft_length_bounds_exceeded",
+    "Structured draft contains invalid Unicode": "invalid_draft_unicode",
 }
 
 
@@ -180,17 +197,23 @@ def make_representation(
             + "\n"
             + all_prompts["summary_free" if condition == "free_summary" else "summary_structured"]
         )
-        request = _summary_request(transcript, body, budget)
+        bounded = (
+            condition == "structured_summary"
+            and config.structured_summary_mode == "schema_citations_bounded_v1"
+        )
+        request = _summary_request(transcript, body, budget, bounded=bounded)
         visible = {event.event_id for event in transcript.events}
         schema_mode = (
             condition == "structured_summary"
-            and config.structured_summary_mode == "schema_citations_v1"
+            and config.structured_summary_mode != "prompt"
         )
         text, status, keys = "", "invalid_output", []
         for attempt in range(config.max_attempts):
-            generation_options = {"structured_schema": structured_summary_schema(visible)} if (
-                schema_mode
-            ) else {}
+            generation_options = {
+                "structured_schema": structured_summary_schema(
+                    visible, token_budget=budget if bounded else None,
+                ),
+            } if schema_mode else {}
             key, call = provider.generate(
                 model=config.summarizer_model,
                 system=system,
@@ -206,7 +229,7 @@ def make_representation(
             measured = None
             reason = "provider_response_failed"
             assembly_diagnostic = dict(
-                assembly_mode="schema_citations_v1",
+                assembly_mode=config.structured_summary_mode,
                 raw_text_hash=digest(call["text"]),
                 raw_measured_tokens=None,
                 assembled_text_hash=None,
@@ -219,7 +242,9 @@ def make_representation(
                     raw_measured = count(candidate)
                     if schema_mode:
                         assembly_diagnostic["raw_measured_tokens"] = raw_measured
-                        candidate = assemble_structured_summary(candidate, visible)
+                        candidate = assemble_structured_summary(
+                            candidate, visible, token_budget=budget if bounded else None,
+                        )
                         assembly_key = digest(_identity(
                             transcript, config, condition, repetition, "summary_assembly", attempt
                         ))
@@ -229,7 +254,7 @@ def make_representation(
                         store.put("summary_assemblies", assembly_key, dict(
                             text=candidate,
                             raw_call_key=key,
-                            assembly_mode="schema_citations_v1",
+                            assembly_mode=config.structured_summary_mode,
                             canaries=getattr(provider, "canaries", []),
                         ))
                         measured = count(candidate)
@@ -268,6 +293,7 @@ def make_representation(
                 counter_method=provider.counter_method,
                 canaries=getattr(provider, "canaries", []),
                 **assembly_diagnostic,
+                **({"draft_limits": draft_limits(budget)} if bounded else {}),
             ))
             if status == "ok" or reason == "token_count_failed":
                 break
@@ -280,7 +306,9 @@ def make_representation(
                 break
             # Repeat every constraint together, never feed the rejected candidate or
             # evaluator feedback into another request. The attempt limit stays fixed.
-            request = _summary_request(transcript, body, budget, regenerate=True)
+            request = _summary_request(
+                transcript, body, budget, regenerate=True, bounded=bounded,
+            )
         common["call_keys"] = keys
         if status != "ok":
             text = ""
@@ -695,7 +723,11 @@ def _run_locked(
             provider.count_request(
                 config.summarizer_model,
                 prompts(config)["summary_common"] + "\n" + prompts(config)[fmt],
-                _summary_request(t, body, summary_budget, regenerate=attempt > 0),
+                _summary_request(
+                    t, body, summary_budget, regenerate=attempt > 0,
+                    bounded=(fmt == "summary_structured"
+                             and config.structured_summary_mode == "schema_citations_bounded_v1"),
+                ),
             )
             for fmt in ("summary_free", "summary_structured")
             for attempt in range(config.max_attempts)

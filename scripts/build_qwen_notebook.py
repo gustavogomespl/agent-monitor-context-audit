@@ -11,7 +11,7 @@ import nbformat
 
 ROOT = Path(__file__).resolve().parents[1]
 
-INTRO = """# Qwen context audit · Summary v4 · guided Colab run
+INTRO = """# Qwen context audit · Summary v5 · guided Colab run
 
 1. **Runtime → Change runtime type**: select one H100 80GB or RTX PRO 6000 Blackwell 96GB GPU.
 2. **Form 1 below**: keep **STAGE = pilot** for the first run, confirm the two review boxes,
@@ -32,18 +32,21 @@ Results, logs, dataset and budget stay in your private Drive folder and are reus
 reconnect. The notebook includes its matching public runtime, so you do not need to
 upload a patch or edit the branch.
 
-**This notebook starts the `summary-v4` development amendment.** It repeats all 24
-pilot evaluations with constrained structured-summary generation. Each item has text
-and required references selected from the visible events. The application renders the
-citations and derives the final ID list, preserving all claims. The compressed ceiling
-is now **2,048 tokens**, shared by head/tail, free and structured summaries. The
-25% rule and 128-token floor still apply; full history remains integral. Both
+**This notebook starts the `summary-v5` development amendment.** It repeats all 24
+pilot evaluations with bounded, constrained structured-summary generation. The schema
+permits at most two claims per field and two visible-event references per item,
+with text limits adapted to the body budget. The application renders the citations
+and derives the final ID list, preserving all accepted claims. Head/tail, free and
+structured summaries share a **1,024-token floor**
+and **2,048-token maximum**, with the same 25% rule and input-length ceiling. Full
+history remains integral. Bodies of at most 1,024 tokens are reused unchanged in every
+condition, without summary generation. Both
 summarizers may generate up to 3,200 raw tokens to finish formatting, while the
 complete final representation must fit its per-example ceiling. The two-attempt
 limit, citation validation and four conditions remain unchanged.
 Before model startup, a CPU check verifies the pinned citation decoder.
 Existing dataset, split, model revision, runtime pins and context selection are reused;
-previous evaluations stay untouched. New results appear in `numeric-results/summary-v4`.
+previous evaluations stay untouched. New results appear in `numeric-results/summary-v5`.
 Keep your existing Drive folder; no deletion or manual patch is needed.
 
 Transcript lengths are checked before scoring. If they need more context, the notebook
@@ -75,7 +78,7 @@ ADVANCED = '''#@title Optional settings — keep these defaults to resume your e
 from pathlib import Path
 
 #@markdown Folder under My Drive. Keep the same name to reuse data, pins and budget.
-#@markdown Summary v4 has its own cache and results; all previous runs are preserved.
+#@markdown Summary v5 has its own cache and results; all previous runs are preserved.
 WORKSPACE_FOLDER = "agent-monitor-context-audit-private" #@param {type:"string"}
 #@markdown GPU minutes used **before this workflow**, only for a brand-new budget.
 #@markdown An existing initial debit is restored automatically.
@@ -86,8 +89,8 @@ PRIOR_GPU_MINUTES = 0 #@param {type:"number"}
 if (not WORKSPACE_FOLDER or Path(WORKSPACE_FOLDER).name != WORKSPACE_FOLDER
         or WORKSPACE_FOLDER in {".", ".."}):
     raise ValueError("Use one folder name under My Drive.")
-EXPERIMENT_VERSION = "summary-v4"
-REPO = Path("/content/agent-monitor-context-audit-summary-v4")
+EXPERIMENT_VERSION = "summary-v5"
+REPO = Path("/content/agent-monitor-context-audit-summary-v5")
 DRIVE_ROOT = Path("/content/drive/MyDrive") / WORKSPACE_FOLDER
 MODEL_ID = "Qwen/Qwen3.8-27B"
 MODEL_REVISION = ""
@@ -109,15 +112,15 @@ ENDING = """### Reading the output
 - `Finished: executed | Results: …` plus the AUROC per condition means the stage completed;
   the runtime then disconnects on its own.
 - `Stopped: <ErrorClass>: <message>` means a step failed. The line names the cause; the
-  full private diagnostic is `runs-private/notebook-status/summary-v4/last-error.log` on Drive.
+  full private diagnostic is `runs-private/notebook-status/summary-v5/last-error.log` on Drive.
 - `<stage> did not complete (runner exit code …)` lists successful/expected evaluations,
   counts per status and the worker's final error line; the partial report is still saved.
 - `Not started (STAGE = …)` with `[ ]` boxes means form 1 is incomplete; nothing ran.
 
 ### After the run
 
-The first output line must say **Experiment: summary-v4**. Your Drive folder contains
-`numeric-results/summary-v4/<stage>/reproduced/findings.md`,
+The first output line must say **Experiment: summary-v5**. Your Drive folder contains
+`numeric-results/summary-v5/<stage>/reproduced/findings.md`,
 `public_scores.csv`, `metrics.json` and figures. The final cell prints exact paths
 and releases the GPU automatically, including when setup or inference fails.
 
@@ -125,7 +128,7 @@ For the next stage, reconnect a GPU, change **STAGE** and choose **Run all** aga
 Successful saved evaluations from this version are reused. Development stops if the pilot is
 incomplete. Test requires successful reviewed development and matching frozen methods.
 
-If a run stops, inspect `runs-private/notebook-status/summary-v4/last-error.log` and the phase's
+If a run stops, inspect `runs-private/notebook-status/summary-v5/last-error.log` and the phase's
 `gpu_sessions/server_logs` / `runner_logs`. Measured time and partial records remain
 saved. A runtime lost without a confirmed end time requires accounting review;
 rerunning never resets its reserved budget. Initial Drive access and human review
@@ -194,7 +197,7 @@ def build(root=ROOT):
     for index, cell in enumerate(cells):
         cell.id = f"qwen-guided-{index}"
     notebook = nbformat.v4.new_notebook(cells=cells, metadata={
-        "colab": {"name": "qwen_colab_summary_v4.ipynb", "provenance": []},
+        "colab": {"name": "qwen_colab_summary_v5.ipynb", "provenance": []},
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
         "language_info": {"name": "python"}, "accelerator": "GPU",
     })
