@@ -7,12 +7,14 @@ head/tail text, a prose summary and a structured summary under a common
 per-example token ceiling.
 
 **Research status: Qwen development runs exist; the study is not complete.**
-The supplied v5 pilot records contain six structured-summary failures after
-12 request timeouts and one head/tail monitor citation failure. The current v6
-amendment adds compact citation decoding, monitor evidence constraints and a
-tokenizer-only latency gate. A fresh pilot and full development must precede
-reviewed held-out evaluation. Synthetic fixtures demonstrate engineering behavior
-only; superiority of structured summaries has not been established.
+The supplied v6 pilot completed 24 of 24 evaluations, and its full development
+completed 63 of 64. The remaining structured-summary failure mentioned an event
+in claim prose that was absent from that item's selected evidence list, in both
+attempts. The current v7 amendment separates claim prose from evidence IDs while
+preserving the final 2,048-token ceiling and existing failure policy. A fresh v7
+pilot and full development must precede reviewed held-out evaluation. Synthetic
+fixtures demonstrate engineering behavior only; superiority of structured
+summaries has not been established.
 The full scope is in the user-supplied [research plan](research_plan.md), and
 the original offline report is in [findings](reports/findings.md). Current private
 run reports remain on the author's Drive.
@@ -51,7 +53,7 @@ The guided workflow also measures setup/report overhead; time outside the workfl
 still needs explicit accounting. Unknown monetary costs remain null. The GPU
 requires at least 75,000 MiB VRAM and native BF16; eligibility does not prove model
 fit or kernel compatibility. Default Run All is inert until the form is confirmed.
-The current summary-v6 GPU pilot remains pending. Its CPU latency check is not
+The current summary-v7 GPU pilot remains pending. Its CPU latency check is not
 GPU validation or evidence of improved monitoring. See the
 [version-specific changes and upload instructions](docs/qwen_colab.md).
 

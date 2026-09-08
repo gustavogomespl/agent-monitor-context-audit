@@ -47,7 +47,7 @@ def apply_embedded_source(repo, drive_root, *, frozen=False, encoded=None, expec
 
     if run_version is not None or run_root is not None:
         if (run_version not in {
-                "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6"}
+                "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7"}
                 or run_root is None or run_root.name != "runs-private"
                 or drive_root.resolve() != run_root.parent.resolve() / "versions" / run_version):
             raise ValueError("A versioned source refresh requires its isolated version workspace.")

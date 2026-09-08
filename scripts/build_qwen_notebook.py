@@ -11,7 +11,7 @@ import nbformat
 
 ROOT = Path(__file__).resolve().parents[1]
 
-INTRO = """# Qwen context audit · Summary v6 · guided Colab run
+INTRO = """# Qwen context audit · Summary v7 · guided Colab run
 
 1. **Runtime → Change runtime type**: select one H100 80GB or RTX PRO 6000 Blackwell 96GB GPU.
 2. **Form 1 below**: keep **STAGE = pilot** for the first run, confirm the two review boxes,
@@ -34,11 +34,13 @@ Results, logs, dataset and budget stay in your private Drive folder and are reus
 reconnect. The notebook includes its matching public runtime, so you do not need to
 upload a patch or edit the branch.
 
-**This notebook starts the `summary-v6` development amendment.** It repeats all 24
-pilot evaluations with a compact structured-summary schema. The schema permits at
-most two claims per field and two visible-event references per item, without a text
-length regular expression. The application renders the citations
-and derives the final ID list, preserving all accepted claims. Head/tail, free and
+**This notebook starts the `summary-v7` development amendment.** It repeats all 24
+pilot evaluations with claim prose separated from evidence IDs. Event IDs belong only
+in each item’s `evidence_event_ids`; the decoder and local validator reject IDs in
+claim prose. Select all visible events needed to support each claim. The schema permits
+at most two claims per field and two visible-event references per item, without a text
+length regular expression. The application renders the citations and derives the final
+ID list, preserving all accepted claims. Head/tail, free and
 structured summaries share a **1,024-token floor**
 and **2,048-token maximum**, with the same 25% rule and input-length ceiling. Full
 history remains integral. Bodies of at most 1,024 tokens are reused unchanged in every
@@ -53,7 +55,7 @@ the pinned decoder and measure full-vocabulary token-mask latency using only the
 pinned tokenizer. Failure stops setup; passing these checks does not establish
 generation speed or monitoring quality.
 Existing dataset, split, model revision, runtime pins and context selection are reused;
-previous evaluations stay untouched. New results appear in `numeric-results/summary-v6`.
+previous evaluations stay untouched. New results appear in `numeric-results/summary-v7`.
 Keep your existing Drive folder; no deletion or manual patch is needed.
 
 Transcript lengths are checked before scoring. If they need more context, the notebook
@@ -85,7 +87,7 @@ ADVANCED = '''#@title Optional settings — keep these defaults to resume your e
 from pathlib import Path
 
 #@markdown Folder under My Drive. Keep the same name to reuse data, pins and budget.
-#@markdown Summary v6 has its own cache and results; all previous runs are preserved.
+#@markdown Summary v7 has its own cache and results; all previous runs are preserved.
 WORKSPACE_FOLDER = "agent-monitor-context-audit-private" #@param {type:"string"}
 #@markdown GPU minutes used **before this workflow**, only for a brand-new budget.
 #@markdown An existing initial debit is restored automatically.
@@ -96,8 +98,8 @@ PRIOR_GPU_MINUTES = 0 #@param {type:"number"}
 if (not WORKSPACE_FOLDER or Path(WORKSPACE_FOLDER).name != WORKSPACE_FOLDER
         or WORKSPACE_FOLDER in {".", ".."}):
     raise ValueError("Use one folder name under My Drive.")
-EXPERIMENT_VERSION = "summary-v6"
-REPO = Path("/content/agent-monitor-context-audit-summary-v6")
+EXPERIMENT_VERSION = "summary-v7"
+REPO = Path("/content/agent-monitor-context-audit-summary-v7")
 DRIVE_ROOT = Path("/content/drive/MyDrive") / WORKSPACE_FOLDER
 MODEL_ID = "Qwen/Qwen3.8-27B"
 MODEL_REVISION = ""
@@ -119,15 +121,15 @@ ENDING = """### Reading the output
 - `Finished: executed | Results: …` plus the AUROC per condition means the stage completed;
   the runtime then disconnects on its own.
 - `Stopped: <ErrorClass>: <message>` means a step failed. The line names the cause; the
-  full private diagnostic is `runs-private/notebook-status/summary-v6/last-error.log` on Drive.
+  full private diagnostic is `runs-private/notebook-status/summary-v7/last-error.log` on Drive.
 - `<stage> did not complete (runner exit code …)` lists successful/expected evaluations,
   counts per status and the worker's final error line; the partial report is still saved.
 - `Not started (STAGE = …)` with `[ ]` boxes means form 1 is incomplete; nothing ran.
 
 ### After the run
 
-The first output line must say **Experiment: summary-v6**. Your Drive folder contains
-`numeric-results/summary-v6/<stage>/reproduced/findings.md`,
+The first output line must say **Experiment: summary-v7**. Your Drive folder contains
+`numeric-results/summary-v7/<stage>/reproduced/findings.md`,
 `public_scores.csv`, `metrics.json` and figures. The final cell prints exact paths
 and releases the GPU automatically, including when setup or inference fails.
 
@@ -135,7 +137,7 @@ For the next stage, reconnect a GPU, change **STAGE** and choose **Run all** aga
 Successful saved evaluations from this version are reused. Development stops if the pilot is
 incomplete. Test requires successful reviewed development and matching frozen methods.
 
-If a run stops, inspect `runs-private/notebook-status/summary-v6/last-error.log` and the phase's
+If a run stops, inspect `runs-private/notebook-status/summary-v7/last-error.log` and the phase's
 `gpu_sessions/server_logs` / `runner_logs`. Measured time and partial records remain
 saved. A runtime lost without a confirmed end time requires accounting review;
 rerunning never resets its reserved budget. Initial Drive access and human review

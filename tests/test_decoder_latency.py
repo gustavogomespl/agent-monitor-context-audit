@@ -196,6 +196,43 @@ def test_receipt_profiles_both_schemas_with_512_visible_ids(monkeypatch, latency
     assert receipt["mask_calls"] == 560
 
 
+def test_v7_latency_receipt_binds_the_selected_production_schema(monkeypatch, latency):
+    xgr, compiler, tokenizer, _, _ = fake_runtime(monkeypatch, latency)
+    compiled_schemas = []
+    compiler.compile_json_schema = lambda schema: compiled_schemas.append(schema) or object()
+    xgr.GrammarCompiler = lambda info, **kwargs: compiler
+    monkeypatch.setattr(latency, "_load_runtime", lambda *args: (
+        xgr, tokenizer, SimpleNamespace(vocab_size=248320), {"xgrammar": "0.2.3"},
+        {"config_revision_pin": "a" * 40, "loaded_config_revision": None},
+    ))
+    receipt = latency.check_decoder_latency(
+        "Qwen/Qwen3.8-27B", "a" * 40,
+        structured_summary_mode="schema_citations_separate_ids_v1",
+    )
+    assert receipt["structured_summary_mode"] == "schema_citations_separate_ids_v1"
+    assert receipt["status"] == "passed"
+    assert compiled_schemas[0]["properties"]["environment_and_state"]["items"][
+        "properties"
+    ]["text"]["pattern"]
+
+
+def test_latency_cli_forwards_v7_mode_to_the_isolated_worker(monkeypatch, latency, capsys):
+    def run(command, **kwargs):
+        index = command.index("--structured-summary-mode")
+        assert command[index + 1] == "schema_citations_separate_ids_v1"
+        return SimpleNamespace(returncode=0, stdout=json.dumps({
+            "status": "passed", "model_generation_executed": False,
+            "structured_summary_mode": "schema_citations_separate_ids_v1",
+        }))
+
+    monkeypatch.setattr(latency.subprocess, "run", run)
+    assert latency.main([
+        "--model", "Qwen/Qwen3.8-27B", "--revision", "a" * 40,
+        "--structured-summary-mode", "schema_citations_separate_ids_v1",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "passed"
+
+
 def test_cli_hard_timeout_returns_failed_json_and_nonzero(monkeypatch, latency, capsys):
     def timeout(command, **kwargs):
         assert kwargs["timeout"] == 150

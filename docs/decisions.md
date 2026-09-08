@@ -672,3 +672,61 @@ score gain or completion within the remaining allowance is established. Delivery
 uses `dist/qwen_colab_summary_v6_<hash>.ipynb` with empty outputs; the Colab badge
 continues to load the published branch until the new artifact is published.
 Implementation does not authorize live generation, public push or publication.
+
+
+## 2026-09-08: author-authorized summary-v7 separation of claim prose and evidence IDs
+
+The supplied private v6 pilot completed 24 of 24 evaluations; full development
+completed 63 of 64. Offline replay of the remaining structured-summary failure
+confirmed that both normally completed JSON drafts mentioned an event in claim
+prose absent from that item's selected evidence list. The local validator rejected
+both before monitoring. The author approved the proposed v7 structural correction.
+This responds to observed development format failures, not an attempt to optimize
+AUROC or use held-out outcomes. No benchmark text, private example identifiers,
+model outputs or evaluator labels enter public source or synthetic tests.
+
+The new mode is `schema_citations_separate_ids_v1`. Supporting event IDs belong
+exclusively in each item's `evidence_event_ids`, and claim prose must contain no
+IDs. The prompt requests all visible evidence needed for each claim; the decoder
+and local validator enforce the separation. The four typed arrays, maximum two
+claims per field, one or two selected visible references per claim, nonblank prose
+and rejection of extra properties remain enforced. Deterministic assembly preserves
+accepted wording and renders only model-selected citations; it does not infer a
+missing reference, rewrite claims or silently discard content. Correct reference
+format does not prove faithful evidence selection.
+
+No per-claim text-length bound is restored. The shared final body ceiling remains
+`B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`, with identity handling
+at or below 1,024 tokens. Both summary conditions retain the 60–80% target,
+3,200-token raw allowance and at most two attempts. The exact final validator
+counts the complete representation, including all fields and citations. Retries
+receive the original input and generic requirements, never rejected drafts,
+validation errors or evaluator labels. Persistent failures keep null scores and
+escalate. Full history remains complete. The v6 monitor schema, rubric, continuous
+0–100 scoring, 700-token allowance and visible-evidence constraints are unchanged.
+
+Before loading model weights, semantic decoder checks and the full-vocabulary
+latency gate exercise the v7 production schema. The guided v7 CLI passes
+`--structured-summary-mode schema_citations_separate_ids_v1`; its receipt must
+report that same mode. Historical v6 retains its existing CLI behavior. The
+0.25-second per-mask threshold, bounded subprocess deadline and no-fallback policy
+remain unchanged. Private receipts record the selected mode, model revision,
+schema hashes and measured timings. These checks use the pinned tokenizer/config
+without model weights and do not establish GPU throughput or monitoring quality.
+
+V7 repeats all 24 pilot evaluations with fresh calls and caches. Its source,
+configuration and numeric results use the summary-v7 namespace. First setup
+prefers valid v6 provenance, then v5, v4, v3, v2 and legacy. Earlier source,
+configs, responses, results and time receipts remain intact; the v6 failure is not
+rescued or reclassified. Data, opaque IDs, family split, measured context,
+model/tokenizer/runtime pins and the remaining shared 12-hour budget are preserved.
+Earlier freeze or test evidence blocks creating this amendment. Full development
+and reviewed freezing remain required before held-out scoring.
+
+Codex implemented the author-requested exploratory amendment with parallel AI
+assistance and independent synthetic checks. Offline checks do not establish
+successful v7 GPU inference, improved detection, or completion within the remaining
+GPU allowance. Delivery uses `dist/qwen_colab_summary_v7_<hash>.ipynb` with empty
+outputs and inert defaults. The Colab badge still loads the published branch until
+the new notebook is published. Implementation does not authorize model generation,
+public push or publication.

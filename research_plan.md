@@ -1,11 +1,13 @@
 # Agent Monitor Context Audit
 
-> **Current Qwen development version: summary-v6.** Its amendment below removes
-> the v5 per-claim text bound, retains compact claim/reference limits, constrains
-> monitor citations to each representation's visible evidence and adds a full-vocabulary
-> tokenizer-only decoder latency gate. Budgets remain unchanged from v5. Earlier
-> amendments and the original proposal remain historical context. Development
-> failures motivated the change; held-out scores did not. The v6 GPU run is pending.
+> **Current Qwen development version: summary-v7.** The supplied v6 pilot completed
+> 24 of 24 evaluations; full development completed 63 of 64. Its remaining failure
+> involved an event ID in claim prose absent from the item's selected evidence list.
+> V7 separates claim prose from evidence IDs, retains v6 monitor decoding and all
+> token budgets, and starts a new 24-evaluation pilot. This author-authorized
+> exploratory development change addresses format validity, not score optimization.
+> Held-out outcomes did not guide it. V7 GPU execution remains pending. Earlier
+> amendments and the original proposal remain historical context.
 
 > **Infrastructure amendment — 2026-09-06 (English repository note).** The author
 > requested adapting the experiment to `Qwen/Qwen3.8-27B` on a Colab H100 and
@@ -246,6 +248,68 @@
 > and tokenizer latency measurements do not establish improved coverage, monitoring
 > quality or completion within the remaining GPU allowance. No live generation or
 > publication is implied by the implementation.
+
+
+> **Development amendment — summary-v7 (2026-09-08).** The author supplied private
+> v6 pilot and full-development artifacts, then authorized the proposed revision
+> after offline diagnosis. The v6 pilot completed all 24 evaluation units; full
+> development completed 63 of 64. In both saved attempts of the remaining
+> structured-summary failure, claim prose named an event absent from that item's
+> selected evidence list. Valid JSON and normal provider completion did not make
+> those drafts valid: the local citation validator rejected both before monitoring.
+> The original v6 records remain failures with null scores; they are not repaired
+> or retroactively reclassified by this amendment. No private text or identifiers
+> appear in public implementation notes or synthetic tests.
+>
+> V7 uses `structured_summary_mode="schema_citations_separate_ids_v1"`. Each claim
+> puts its supporting event IDs exclusively in its own `evidence_event_ids` list;
+> claim prose must contain no event IDs. The prompt asks the model to select all
+> visible events needed to support the claim. The production decoder and the local
+> validator enforce this separation. The four typed arrays, at most two claims per
+> field, one or two selected visible references per claim, nonblank prose and exact
+> object properties remain required. The application preserves accepted wording,
+> appends only model-selected citations and derives the final citation index.
+> It never rewrites, trims or drops a claim, fills in a missing reference or uses
+> evaluator information to choose references. Citation format cannot establish that
+> a selected event semantically supports a claim.
+>
+> No per-claim text-length bound is restored. Head/tail and both summaries retain
+> `B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`, with identity handling for
+> bodies of at most 1,024 tokens. Both summarizers keep the 60–80% target and
+> 3,200-token raw allowance. The complete assembled representation, including
+> every field and citation, must pass the exact final token count. At most two
+> attempts are allowed, using the original input and generic instructions only.
+> Rejected drafts and validator messages never become retry feedback. Persistent
+> failures retain null scores and escalate. Full history remains complete.
+>
+> The v6 monitor mode `schema_visible_evidence_v1` remains unchanged in all four
+> conditions and both attempts, with the same rubric, continuous 0–100 score and
+> 700-token output ceiling. Thinking, tool access and evaluator fields remain
+> excluded. The weights/tokenizer/runtime pins and measured context are unchanged.
+>
+> The semantic decoder check and full-vocabulary tokenizer-only latency gate cover
+> the v7 production schema before downloading or loading model weights. The
+> latency subprocess is explicitly told `schema_citations_separate_ids_v1`; v7
+> setup rejects a receipt reporting another mode or no mode. The existing
+> 0.25-second per-mask threshold, bounded setup deadline and failure-without-fallback
+> policy remain in force. Private receipts record mode, schema hashes, revision
+> and timings. These CPU checks are not GPU throughput or monitoring-quality tests.
+>
+> All 24 pilot units start afresh in isolated `summary-v7` calls, caches and results.
+> First setup inherits the newest valid v6, v5, v4, v3, v2 or legacy source/context
+> provenance. The same data, opaque IDs, family split, immutable model/runtime pins
+> and remaining shared 12-hour budget survive. Prior source, configurations,
+> responses, numeric results and time receipts are preserved. Earlier freeze or
+> test evidence blocks creating this development amendment. Full development and
+> explicit reviewed freezing remain required before held-out scoring.
+>
+> This is an author-authorized exploratory change to the structured intervention
+> after observed development format failures, not an AUROC-driven tuning step or
+> a held-out result. Codex implemented it with parallel AI assistance and
+> independent synthetic checks. The revised GPU pilot and full development must
+> assess feasibility; improved coverage, better monitoring or completion within
+> the remaining allowance is not established by implementation. No live generation,
+> public push or publication is implied.
 
 ## Plano de pesquisa e implementação para o Codex
 

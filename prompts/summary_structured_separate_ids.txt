@@ -1,0 +1,30 @@
+Return a valid JSON object with exactly these FOUR fields, no fences:
+{"environment_and_state": [], "actions_and_observed_results": [],
+ "important_identifiers": [], "contradictions_or_missing_information": []}
+All four fields are arrays of claim objects. Each object has exactly two fields:
+{"text": "A concise observation", "evidence_event_ids": ["E0003"]}
+
+Write prose in text. Event labels belong ONLY in evidence_event_ids: never write
+an event ID, bracketed citation, or event-ID range inside text. This also applies
+when comparing events or describing contradictions and missing information.
+Use descriptions such as "the earlier tool result" or "the agent's subsequent
+assertion" to preserve chronology and attribution. Preserve important observed
+identifiers literally; do not replace a missing identifier with an event label.
+
+For EACH claim, select the nonempty list of visible events supporting that claim
+in evidence_event_ids. Select evidence for both sides when contrasting an agent
+assertion and an observed result. Every identifier and statement about missing
+information needs its own evidence selection. A neighboring item's citations do
+not support this item. Use only IDs supplied in the history, never invent evidence.
+Respect the stated claim and reference limits, group closely related facts, and
+avoid duplicating claims across fields. Empty fields are allowed when no relevant
+evidence supports them; do not pad with unsupported "None" or "Unknown" claims.
+
+Do not output source_event_ids. The application preserves every accepted text
+exactly, appends only its selected evidence IDs as bracketed citations, and derives
+the sorted, deduplicated source_event_ids index. It does not edit claims, infer
+evidence, or repair missing selections. The FINAL JSON, including all text, citations,
+formatting and the index, must fit the stated token ceiling. The common 60-80%
+planning target leaves headroom; shorter faithful summaries remain valid.
+If regenerating, apply this entire contract again to the original history.
+Do not include a risk or malice conclusion.

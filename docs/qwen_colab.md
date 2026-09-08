@@ -4,7 +4,7 @@
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gustavogomespl/agent-monitor-context-audit/blob/pilot/notebooks/03_qwen_colab.ipynb)
 
-1. Upload the supplied `dist/qwen_colab_summary_v6_<hash>.ipynb` with
+1. Upload the supplied `dist/qwen_colab_summary_v7_<hash>.ipynb` with
    **File → Upload notebook**, or upload the rebuilt `notebooks/03_qwen_colab.ipynb`.
    The badge above loads the committed notebook from `pilot`; it reflects this
    version only after the rebuilt notebook is published.
@@ -22,7 +22,72 @@ reporting. It saves the report to Drive and releases GPU allocation at the end,
 including setup/error paths. Default Run All without confirmed form fields prints
 the unchecked fields and does not mount Drive or execute an experiment.
 
-## Current development amendment: summary-v6
+## Current development amendment: summary-v7
+
+Upload the supplied v7 notebook, keep **STAGE = pilot** and the same Drive folder,
+confirm data use and rubric review, then check **START_RUN** and select **Run all**.
+The header must show `Experiment: summary-v7`. All 24 evaluations are fresh v7
+calls; neither successful nor failed v6 evaluations become v7 results. The test
+review checkbox remains false until a separate, reviewed test execution.
+
+The supplied v6 pilot completed 24 of 24 evaluations. Full development completed
+63 of 64; both attempts of its remaining structured-summary failure put an event
+ID in claim prose without selecting it in that item's evidence list. The local
+validator rejected those drafts before the monitor. V7 addresses this format
+failure and preserves the v6 results, including the null failure score. It does
+not establish improved detection or a successful new GPU run.
+
+`schema_citations_separate_ids_v1` puts IDs only in each item's
+`evidence_event_ids`, with no event IDs in claim prose. The model must select all
+visible evidence needed to support the claim. Decoder constraints and the local
+validator enforce this separation. At most two claims per field and two selected
+references per claim remain allowed. Nonblank text, valid visible references and
+all typed fields remain mandatory. The application preserves accepted prose and
+adds only the citations chosen by the model. It never fills in a missing reference,
+rewrites a claim or removes text to make an invalid output pass. Valid citation
+format is separate from whether an event supports the claim.
+
+The common final body rule remains
+`B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`. At or below 1,024 tokens,
+all compressed conditions reuse the body unchanged. Both summarizers retain the
+60–80% target, 3,200-token raw allowance and two-attempt maximum. No per-claim
+text-length bound is restored. Every assembled field and citation must fit the
+exact final token ceiling; failures keep null scores. Full history remains
+complete. Retry inputs contain only the original input and generic requirements,
+without rejected drafts, validator feedback or evaluator labels.
+
+The v6 monitor mode, rubric, continuous 0–100 scores, 700-token monitor allowance,
+visible-evidence ID constraints and all model/runtime pins stay unchanged. Before
+weights load, the semantic decoder probe and tokenizer-only full-vocabulary gate
+check the v7 production schema. The gate explicitly selects the v7 mode and its
+receipt must identify that same mode. Each mask must take at most 0.25 seconds;
+any failure stops setup without fallback. A passed CPU gate does not validate GPU
+throughput or monitoring quality. Its private receipt is
+`versions/summary-v7/configuration/decoder-latency.json`.
+
+With the inherited 196,608-token context, the new run directory is
+`runs-private/qwen-pilot-summary-v7-ctx196608/`, and the report is
+`numeric-results/summary-v7/pilot/reproduced/findings.md`. First setup inherits v6
+source/context provenance when valid, then v5, v4, v3, v2 and legacy. The dataset,
+IDs, split, pins and remaining shared 12-hour budget are retained. Earlier source,
+configuration, responses and results stay intact. An earlier freeze or test run
+blocks creation of this development amendment. No folder deletion, manual patch
+or branch edit is needed.
+
+After a complete v7 pilot, inspect its report and select **development** to run all
+eight development pairs. Review that full run before choosing test. This
+exploratory structural correction was authorized after development format failures;
+held-out outcomes and score optimization did not guide it. See the
+[v7 protocol amendment](../research_plan.md) and [decision record](decisions.md).
+The badge continues to load the published branch, so upload the supplied v7
+artifact until that version is published.
+
+## Historical development amendment: summary-v6
+
+**Execution follow-up (2026-09-08):** supplied v6 artifacts later confirmed a
+24-of-24 pilot and 63-of-64 full development. The remaining failure motivated the
+v7 amendment above. The following describes the original v6 contract and its
+pre-run expectations, not the current notebook.
 
 Use the supplied v6 notebook with **STAGE = pilot** and the same Drive workspace.
 Confirm data use and rubric review, then **START_RUN**; all three are initially
@@ -297,25 +362,25 @@ No public push occurs.
 The default private folder is `My Drive/agent-monitor-context-audit-private`.
 The final cell prints full paths. For each phase:
 
-- `numeric-results/summary-v6/<phase>/public_scores.csv`: sanitized numeric rows.
-- `numeric-results/summary-v6/<phase>/reproduced/findings.md`: report.
-- `numeric-results/summary-v6/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
-- `runs-private/notebook-status/summary-v6/latest.json`: workflow status and output locations.
-- `runs-private/notebook-status/summary-v6/last-error.log`: last full private diagnostic.
-- `runs-private/qwen-<phase>-summary-v6-ctx196608/gpu_sessions/server_logs/`
+- `numeric-results/summary-v7/<phase>/public_scores.csv`: sanitized numeric rows.
+- `numeric-results/summary-v7/<phase>/reproduced/findings.md`: report.
+- `numeric-results/summary-v7/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
+- `runs-private/notebook-status/summary-v7/latest.json`: workflow status and output locations.
+- `runs-private/notebook-status/summary-v7/last-error.log`: last full private diagnostic.
+- `runs-private/qwen-<phase>-summary-v7-ctx196608/gpu_sessions/server_logs/`
   and `runner_logs/`: engine/worker logs when inheriting the saved 196,608-token window.
 
 After a context adjustment, active run directories have a `-ctx<tokens>` suffix.
 The original attempt remains intact. The suffix reflects the actual saved window;
 a workspace without a prior context choice initially has no context suffix.
-Earlier legacy, `summary-v2`, `summary-v3`, `summary-v4` and `summary-v5` results and
+Earlier legacy, `summary-v2`, `summary-v3`, `summary-v4`, `summary-v5` and `summary-v6` results and
 source workspaces stay unchanged. The printed diagnostic paths identify the
 selected version.
 
-`versions/summary-v6/` contains this version's configuration, context selection,
+`versions/summary-v7/` contains this version's configuration, context selection,
 source pin, durable Git metadata, source receipts and eventual frozen snapshot.
 First setup inherits the newest valid parent source pin and context selection from
-`summary-v5`, then `summary-v4`, `summary-v3`, `summary-v2` and legacy. Reconnects retain the
+`summary-v6`, then `summary-v5`, `summary-v4`, `summary-v3`, `summary-v2` and legacy. Reconnects retain the
 new version's own copies. Source files and Git metadata are isolated from earlier
 versions.
 The parent `configuration/model-pin.json`,
@@ -462,9 +527,9 @@ new context choice still needs an authorized GPU pilot.
 
 To resume the reported failure, upload the rebuilt notebook, keep the current Drive
 folder and `STAGE = pilot`, confirm the form, then select **Run all**. There is no
-context variable to edit and no configuration file to delete. For `summary-v6`,
-the newest valid existing selection is inherited from summary-v5, then summary-v4,
-summary-v3, summary-v2 and legacy; it is not recomputed from earlier generation failures. The larger
+context variable to edit and no configuration file to delete. For `summary-v7`,
+the newest valid existing selection is inherited from summary-v6, then summary-v5,
+summary-v4, summary-v3, summary-v2 and legacy; it is not recomputed from earlier generation failures. The larger
 output allowances remain subject to exact request-token preflight validation.
 
 ### Model, hardware and sampling
@@ -480,9 +545,9 @@ latency and GPU cost cannot be compared as if hardware were identical.
 The author reported PyTorch 2.13.0+cu130, CUDA 13.0 and a passing small BF16 matrix
 multiplication on SM120. That diagnostic checked basic PyTorch execution only;
 later private pilot records reached model generation, including the 23-of-24
-summary-v3 pilot and later v4/v5 development runs. The revised summary-v6
-decoding contracts still need their own authorized GPU pilot. Keep vLLM's automatic attention selection and the existing BF16
-configuration.
+summary-v3 pilot and the complete 24-of-24 v6 pilot. V6 full development completed
+63 of 64 evaluations. The revised v7 decoding contract still needs its own GPU
+pilot. Keep vLLM's automatic attention selection and the existing BF16 configuration.
 
 The only Qwen model is `Qwen/Qwen3.8-27B`, shared by independent monitor and
 summarizer requests. vLLM is pinned to 0.28.0; the exact model/tokenizer SHA and

@@ -24,7 +24,9 @@ def test_old_versions_do_not_run_new_grammar_probe(tmp_path, monkeypatch, versio
     assert ns['prepare_structured_outputs']() == {'status': 'not_requested'}
 
 
-@pytest.mark.parametrize('version', ['summary-v3', 'summary-v4', 'summary-v5', 'summary-v6'])
+@pytest.mark.parametrize('version', [
+    'summary-v3', 'summary-v4', 'summary-v5', 'summary-v6', 'summary-v7',
+])
 def test_probe_runs_before_any_model_load_in_fresh_process(tmp_path, monkeypatch, capsys, version):
     ns = bootstrap(tmp_path, version)
     receipt = {'status': 'passed', 'backend': 'xgrammar', 'version': '0.2.3',
@@ -41,7 +43,9 @@ def test_probe_runs_before_any_model_load_in_fresh_process(tmp_path, monkeypatch
     assert 'STRUCTURED_OUTPUTS_OK' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('version', ['summary-v3', 'summary-v4', 'summary-v5', 'summary-v6'])
+@pytest.mark.parametrize('version', [
+    'summary-v3', 'summary-v4', 'summary-v5', 'summary-v6', 'summary-v7',
+])
 def test_probe_failure_stops_setup_without_unconstrained_fallback(tmp_path, monkeypatch, version):
     ns = bootstrap(tmp_path, version)
     calls = []
@@ -65,27 +69,35 @@ def test_older_versions_skip_full_vocabulary_latency_probe(tmp_path, monkeypatch
     assert ns["prepare_decoder_latency"]() == {"status": "not_requested"}
 
 
-def test_v6_latency_probe_uses_pinned_tokenizer_and_persists_receipt(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("version", ["summary-v6", "summary-v7"])
+def test_latency_probe_uses_pinned_tokenizer_and_persists_receipt(
+    tmp_path, monkeypatch, capsys, version,
+):
     import sys
 
-    ns = bootstrap(tmp_path, "summary-v6")
+    ns = bootstrap(tmp_path, version)
     ns["DRIVE_ROOT"] = tmp_path / "drive"
     pin = ns["DRIVE_ROOT"] / "configuration/model-pin.json"
     pin.parent.mkdir(parents=True)
     pin.write_text(json.dumps({"model_id": "Qwen/Qwen3.8-27B", "model_revision": "b" * 40}))
     receipt = {"status": "passed", "model_generation_executed": False,
                "vocab_size": 300000, "max_mask_seconds": 0.025}
+    if version == "summary-v7":
+        receipt["structured_summary_mode"] = "schema_citations_separate_ids_v1"
 
     def run(command, **kwargs):
-        assert command == [sys.executable, "-m", "context_audit.decoder_latency",
+        expected = [sys.executable, "-m", "context_audit.decoder_latency",
                            "--model", "Qwen/Qwen3.8-27B", "--revision", "b" * 40]
+        if version == "summary-v7":
+            expected.extend(["--structured-summary-mode", "schema_citations_separate_ids_v1"])
+        assert command == expected
         assert kwargs["cwd"] == tmp_path
         assert kwargs["timeout"] == 180
         return SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr="")
 
     monkeypatch.setattr(subprocess, "run", run)
     assert ns["prepare_decoder_latency"]() == receipt
-    saved = ns["DRIVE_ROOT"] / "versions/summary-v6/configuration/decoder-latency.json"
+    saved = ns["DRIVE_ROOT"] / f"versions/{version}/configuration/decoder-latency.json"
     assert json.loads(saved.read_text()) == receipt
     assert "DECODER_LATENCY_OK" in capsys.readouterr().out
     assert ns["SETUP_READY"] is False
@@ -148,13 +160,14 @@ def preserve_context_imports():
         sys.path[:] = original_path
 
 
+@pytest.mark.parametrize("version", ["summary-v6", "summary-v7"])
 @pytest.mark.parametrize("latency_passed", [True, False])
-def test_v6_setup_runs_latency_after_decoder_and_before_ready(
-    tmp_path, monkeypatch, latency_passed, preserve_context_imports,
+def test_setup_runs_latency_after_decoder_and_before_ready(
+    tmp_path, monkeypatch, latency_passed, preserve_context_imports, version,
 ):
     import importlib.metadata
 
-    ns = bootstrap(tmp_path, "summary-v6")
+    ns = bootstrap(tmp_path, version)
     ns.update(DRIVE_ROOT=tmp_path / "drive", SETUP_READY=True)
     pin = ns["DRIVE_ROOT"] / "configuration/model-pin.json"
     pin.parent.mkdir(parents=True)
@@ -165,6 +178,8 @@ def test_v6_setup_runs_latency_after_decoder_and_before_ready(
     phases = []
     receipt = {"status": "passed", "model_generation_executed": False,
                "vocab_size": 300000, "max_mask_seconds": 0.025}
+    if version == "summary-v7":
+        receipt["structured_summary_mode"] = "schema_citations_separate_ids_v1"
 
     def imports():
         phases.append("imports")
@@ -205,3 +220,26 @@ def test_v6_setup_runs_latency_after_decoder_and_before_ready(
         assert not (ns["source_workspace"]() / "configuration/setup-history").exists()
     assert ns["SETUP_READY"] is latency_passed
     assert phases == ["install", "install", "imports", "decoder", "latency"]
+
+
+@pytest.mark.parametrize("reported_mode", [None, "schema_citations_compact_v1"])
+def test_v7_requires_a_latency_receipt_for_its_production_schema(
+    tmp_path, monkeypatch, reported_mode,
+):
+    ns = bootstrap(tmp_path, "summary-v7")
+    ns["DRIVE_ROOT"] = tmp_path / "drive"
+    pin = ns["DRIVE_ROOT"] / "configuration/model-pin.json"
+    pin.parent.mkdir(parents=True)
+    pin.write_text(json.dumps({"model_id": "Qwen/Qwen3.8-27B", "model_revision": "b" * 40}))
+    receipt = {"status": "passed", "model_generation_executed": False,
+               "vocab_size": 300000, "max_mask_seconds": 0.025}
+    if reported_mode is not None:
+        receipt["structured_summary_mode"] = reported_mode
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=json.dumps(receipt), stderr="",
+    ))
+    with pytest.raises(RuntimeError, match="production schema"):
+        ns["prepare_decoder_latency"]()
+    path = ns["DRIVE_ROOT"] / "versions/summary-v7/configuration/decoder-latency.json"
+    assert not path.exists()
+    assert ns["SETUP_READY"] is False

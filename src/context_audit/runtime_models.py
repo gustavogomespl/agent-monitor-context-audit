@@ -135,6 +135,7 @@ class AuditConfig(StrictModel):
     structured_summary_mode: Literal[
         "prompt", "schema_citations_v1", "schema_citations_bounded_v1",
         "schema_citations_compact_v1",
+        "schema_citations_separate_ids_v1",
     ] = "prompt"
     monitor_output_mode: Literal["prompt", "schema_visible_evidence_v1"] = "prompt"
     token_fraction: float = Field(default=0.25, gt=0, le=1)

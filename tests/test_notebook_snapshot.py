@@ -92,7 +92,7 @@ def test_recorded_scientific_code_cannot_be_changed_by_snapshot(tmp_path):
 
 
 @pytest.mark.parametrize("version", [
-    "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6",
+    "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7",
 ])
 def test_explicit_version_uses_isolated_source_and_retains_legacy_run(tmp_path, version):
     repo, drive = tmp_path / "repo", tmp_path / "drive"
@@ -110,7 +110,7 @@ def test_explicit_version_uses_isolated_source_and_retains_legacy_run(tmp_path, 
 
 
 @pytest.mark.parametrize("version", [
-    "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6",
+    "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7",
 ])
 def test_existing_version_run_still_blocks_scientific_source_drift(tmp_path, version):
     repo, drive = tmp_path / "repo", tmp_path / "drive"
@@ -128,7 +128,7 @@ def test_existing_version_run_still_blocks_scientific_source_drift(tmp_path, ver
 
 
 @pytest.mark.parametrize("version", [
-    "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6",
+    "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7",
 ])
 def test_version_cannot_bypass_source_guard_in_legacy_workspace(tmp_path, version):
     encoded, expected = payload()
@@ -240,7 +240,7 @@ def test_v6_snapshot_preserves_all_previous_source_receipts_and_results(tmp_path
 
 
 @pytest.mark.parametrize("version", [
-    "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6",
+    "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7",
 ])
 def test_version_source_guard_requires_the_actual_shared_runs_directory(tmp_path, version):
     repo, drive = tmp_path / "repo", tmp_path / "drive"
@@ -284,3 +284,30 @@ def test_delivered_notebook_contains_current_public_source_only():
     assert {"src/context_audit/colab.py", "scripts/colab_bootstrap.py", "uv.lock"} <= paths
     # The eventual Colab freeze must include the amended methods and decision record.
     assert {"research_plan.md", "docs/decisions.md", "docs/qwen_colab.md"} <= paths
+
+
+def test_v7_snapshot_preserves_all_previous_source_receipts_and_results(tmp_path):
+    repo, drive = tmp_path / "repo", tmp_path / "drive"
+    source = repo / "src/context_audit/example.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("old\n")
+    old = {}
+    for version in ("summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6"):
+        manifest = drive / f"runs-private/qwen-pilot-{version}-ctx196608/manifests/run.json"
+        receipt = drive / f"versions/{version}/configuration/notebook-source.json"
+        for path, content in (
+            (manifest, {"code_hash": f"synthetic-{version}-hash"}),
+            (receipt, {"snapshot_sha256": f"synthetic-{version}-snapshot"}),
+        ):
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(content))
+            old[path] = path.read_bytes()
+    encoded, expected = payload()
+    result = apply(repo, drive / "versions/summary-v7", encoded=encoded, expected=expected,
+                   run_root=drive / "runs-private", run_version="summary-v7")
+    assert source.read_text() == "new\n"
+    assert result["snapshot_sha256"] == expected
+    receipt = drive / "versions/summary-v7/configuration/notebook-source.json"
+    assert json.loads(receipt.read_text())["snapshot_sha256"] == expected
+    for path, content in old.items():
+        assert path.read_bytes() == content

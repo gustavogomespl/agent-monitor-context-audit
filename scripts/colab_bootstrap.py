@@ -39,7 +39,9 @@ def source_workspace():
     """Only explicit development amendments get separate source workspaces."""
     if EXPERIMENT_VERSION == "legacy":
         return DRIVE_ROOT
-    if EXPERIMENT_VERSION in {"summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6"}:
+    if EXPERIMENT_VERSION in {
+        "summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7",
+    }:
         return DRIVE_ROOT / "versions" / EXPERIMENT_VERSION
     raise ValueError("Unknown experiment version; choose the matching reviewed notebook.")
 
@@ -63,6 +65,7 @@ def prepare_version_workspace():
         "summary-v4": ("summary-v2", "summary-v3"),
         "summary-v5": ("summary-v2", "summary-v3", "summary-v4"),
         "summary-v6": ("summary-v2", "summary-v3", "summary-v4", "summary-v5"),
+        "summary-v7": ("summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6"),
     }[EXPERIMENT_VERSION]
     older_workspaces = [DRIVE_ROOT, *(
         DRIVE_ROOT / "versions" / version for version in previous_versions
@@ -106,7 +109,10 @@ def prepare_version_workspace():
     temporary = marker.with_suffix(".tmp")
     temporary.write_text(json.dumps({
         "experiment_version": EXPERIMENT_VERSION,
-        "reason": ("Development compact citation schema and visible-evidence monitor amendment; "
+        "reason": ("Development separate claim prose and evidence IDs amendment; "
+                   "fresh complete pilot"
+                   if EXPERIMENT_VERSION == "summary-v7" else
+                   "Development compact citation schema and visible-evidence monitor amendment; "
                    "fresh complete pilot"
                    if EXPERIMENT_VERSION == "summary-v6" else
                    "Development summary floor 1024 and bounded citation schema amendment; "
@@ -377,7 +383,9 @@ def prepare_structured_outputs():
     import subprocess
     import sys
 
-    if EXPERIMENT_VERSION not in {"summary-v3", "summary-v4", "summary-v5", "summary-v6"}:
+    if EXPERIMENT_VERSION not in {
+        "summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7",
+    }:
         return {"status": "not_requested"}
     probe = subprocess.run(
         [sys.executable, "-m", "context_audit.structured_backend"], cwd=REPO,
@@ -400,14 +408,17 @@ def prepare_decoder_latency():
     import subprocess
     import sys
 
-    if EXPERIMENT_VERSION != "summary-v6":
+    if EXPERIMENT_VERSION not in {"summary-v6", "summary-v7"}:
         return {"status": "not_requested"}
     pin = json.loads((DRIVE_ROOT / "configuration/model-pin.json").read_text())
     print("Checking decoder latency with the pinned tokenizer only; "
           "this check does not download or load model weights.", flush=True)
+    command = [sys.executable, "-m", "context_audit.decoder_latency", "--model", pin["model_id"],
+               "--revision", pin["model_revision"]]
+    if EXPERIMENT_VERSION == "summary-v7":
+        command.extend(["--structured-summary-mode", "schema_citations_separate_ids_v1"])
     probe = subprocess.run(
-        [sys.executable, "-m", "context_audit.decoder_latency", "--model", pin["model_id"],
-         "--revision", pin["model_revision"]],
+        command,
         cwd=REPO, capture_output=True, text=True, timeout=180,
     )
     if probe.returncode:
@@ -426,6 +437,9 @@ def prepare_decoder_latency():
         raise RuntimeError("Decoder latency check returned an invalid receipt") from exc
     if receipt.get("status") != "passed" or receipt.get("model_generation_executed") is not False:
         raise RuntimeError("Decoder latency check returned an invalid receipt")
+    if (EXPERIMENT_VERSION == "summary-v7"
+            and receipt.get("structured_summary_mode") != "schema_citations_separate_ids_v1"):
+        raise RuntimeError("Decoder latency receipt does not match the v7 production schema")
     path = source_workspace() / "configuration/decoder-latency.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
@@ -588,20 +602,28 @@ def configured_phase(phase):
                           "development-v1" if EXPERIMENT_VERSION == "legacy" else
                           f"development-{EXPERIMENT_VERSION}"),
         structured_summary_mode=(
+            "schema_citations_separate_ids_v1" if EXPERIMENT_VERSION == "summary-v7" else
             "schema_citations_compact_v1" if EXPERIMENT_VERSION == "summary-v6" else
             "schema_citations_bounded_v1" if EXPERIMENT_VERSION == "summary-v5" else
             "schema_citations_v1" if EXPERIMENT_VERSION in {"summary-v3", "summary-v4"}
             else "prompt"
         ),
         monitor_output_mode=(
-            "schema_visible_evidence_v1" if EXPERIMENT_VERSION == "summary-v6" else "prompt"
+            "schema_visible_evidence_v1"
+            if EXPERIMENT_VERSION in {"summary-v6", "summary-v7"} else "prompt"
         ),
-        token_minimum=1024 if EXPERIMENT_VERSION in {"summary-v5", "summary-v6"} else 128,
+        token_minimum=(
+            1024 if EXPERIMENT_VERSION in {"summary-v5", "summary-v6", "summary-v7"} else 128
+        ),
         token_maximum=(
-            2048 if EXPERIMENT_VERSION in {"summary-v4", "summary-v5", "summary-v6"} else 1024
+            2048
+            if EXPERIMENT_VERSION in {"summary-v4", "summary-v5", "summary-v6", "summary-v7"}
+            else 1024
         ),
         summary_max_tokens=(
-            3200 if EXPERIMENT_VERSION in {"summary-v4", "summary-v5", "summary-v6"} else 1600
+            3200
+            if EXPERIMENT_VERSION in {"summary-v4", "summary-v5", "summary-v6", "summary-v7"}
+            else 1600
         ),
         split="test" if phase == "test" else "development",
         dataset_dir="data/private",
@@ -703,7 +725,7 @@ def install_commands(pin):
     import sys
 
     dependencies = [f"vllm=={pin['vllm_version']}", "transformers>=5.8.0,<6"]
-    if EXPERIMENT_VERSION in {"summary-v3", "summary-v4", "summary-v5", "summary-v6"}:
+    if EXPERIMENT_VERSION in {"summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7"}:
         dependencies.append("xgrammar==0.2.3")
     if "runtime_versions" in pin:
         dependencies.extend(

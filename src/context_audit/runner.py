@@ -78,6 +78,8 @@ def prompts(config: AuditConfig) -> dict[str, str]:
     )}
     if config.structured_summary_mode != "prompt":
         names["summary_structured"] = "summary_structured_schema"
+    if config.structured_summary_mode == "schema_citations_separate_ids_v1":
+        names["summary_structured"] = "summary_structured_separate_ids"
     return {
         name: (Path(config.prompt_dir) / f"{filename}.txt").read_text()
         for name, filename in names.items()
@@ -90,7 +92,7 @@ def build_monitor_prompt(transcript: TranscriptInput, representation_text: str) 
 
 def _summary_request(
     transcript, body: str, budget: int, *, regenerate: bool = False, bounded: bool = False,
-    compact: bool = False,
+    compact: bool = False, separate_ids: bool = False,
 ) -> str:
     """Use one label-free contract for generation and exact context preflight."""
     request = (
@@ -118,6 +120,13 @@ def _summary_request(
             "the common preservation requirements. Do not pad empty fields or "
             "repeat facts. All assembled text, citations and formatting must still "
             "fit the final token ceiling.\n"
+        )
+    if separate_ids:
+        request += (
+            "Keep event labels out of every claim's text. Select all supporting events "
+            "only in that same item's evidence_event_ids. Describe the agent assertion "
+            "and the observed result in words, selecting the evidence for both when "
+            "comparing them. The application adds the selected citations after generation.\n"
         )
     if regenerate:
         request += (
@@ -152,6 +161,7 @@ _SUMMARY_VALIDATION_REASONS = {
     "Claim text references event IDs not selected for this item": "unassigned_claim_event_id",
     "Structured bounded draft limits exceeded": "draft_length_bounds_exceeded",
     "Structured draft contains invalid Unicode": "invalid_draft_unicode",
+    "Structured claim text must not contain event IDs": "inline_claim_event_id",
 }
 
 
@@ -212,9 +222,17 @@ def make_representation(
         )
         compact = (
             condition == "structured_summary"
-            and config.structured_summary_mode == "schema_citations_compact_v1"
+            and config.structured_summary_mode in {
+                "schema_citations_compact_v1", "schema_citations_separate_ids_v1",
+            }
         )
-        request = _summary_request(transcript, body, budget, bounded=bounded, compact=compact)
+        separate_ids = (
+            condition == "structured_summary"
+            and config.structured_summary_mode == "schema_citations_separate_ids_v1"
+        )
+        request = _summary_request(
+            transcript, body, budget, bounded=bounded, compact=compact, separate_ids=separate_ids,
+        )
         visible = {event.event_id for event in transcript.events}
         schema_mode = (
             condition == "structured_summary"
@@ -226,6 +244,7 @@ def make_representation(
                 "structured_schema": structured_summary_schema(
                     visible, token_budget=budget if (bounded or compact) else None,
                     text_bounds=not compact,
+                    citations_in_text=not separate_ids,
                 ),
             } if schema_mode else {}
             key, call = provider.generate(
@@ -260,6 +279,7 @@ def make_representation(
                             candidate, visible,
                             token_budget=budget if (bounded or compact) else None,
                             text_bounds=not compact,
+                            citations_in_text=not separate_ids,
                         )
                         assembly_key = digest(_identity(
                             transcript, config, condition, repetition, "summary_assembly", attempt
@@ -326,6 +346,7 @@ def make_representation(
             # evaluator feedback into another request. The attempt limit stays fixed.
             request = _summary_request(
                 transcript, body, budget, regenerate=True, bounded=bounded, compact=compact,
+                separate_ids=separate_ids,
             )
         common["call_keys"] = keys
         if status != "ok":
@@ -752,7 +773,13 @@ def _run_locked(
                     bounded=(fmt == "summary_structured"
                              and config.structured_summary_mode == "schema_citations_bounded_v1"),
                     compact=(fmt == "summary_structured"
-                             and config.structured_summary_mode == "schema_citations_compact_v1"),
+                             and config.structured_summary_mode in {
+                                 "schema_citations_compact_v1", "schema_citations_separate_ids_v1",
+                             }),
+                    separate_ids=(
+                        fmt == "summary_structured" and config.structured_summary_mode
+                        == "schema_citations_separate_ids_v1"
+                    ),
                 ),
             )
             for fmt in ("summary_free", "summary_structured")
