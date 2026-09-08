@@ -90,6 +90,7 @@ def build_monitor_prompt(transcript: TranscriptInput, representation_text: str) 
 
 def _summary_request(
     transcript, body: str, budget: int, *, regenerate: bool = False, bounded: bool = False,
+    compact: bool = False,
 ) -> str:
     """Use one label-free contract for generation and exact context preflight."""
     request = (
@@ -109,6 +110,14 @@ def _summary_request(
             "within these limits and prioritize the common preservation requirements. "
             "Do not pad empty fields or split one claim to evade a limit. "
             "These structural limits do not replace the final token ceiling.\n"
+        )
+    if compact:
+        request += (
+            "Decoder limits: at most 2 claim objects per field and at most 2 visible "
+            "evidence IDs per claim. Write concise, complete claims and prioritize "
+            "the common preservation requirements. Do not pad empty fields or "
+            "repeat facts. All assembled text, citations and formatting must still "
+            "fit the final token ceiling.\n"
         )
     if regenerate:
         request += (
@@ -201,7 +210,11 @@ def make_representation(
             condition == "structured_summary"
             and config.structured_summary_mode == "schema_citations_bounded_v1"
         )
-        request = _summary_request(transcript, body, budget, bounded=bounded)
+        compact = (
+            condition == "structured_summary"
+            and config.structured_summary_mode == "schema_citations_compact_v1"
+        )
+        request = _summary_request(transcript, body, budget, bounded=bounded, compact=compact)
         visible = {event.event_id for event in transcript.events}
         schema_mode = (
             condition == "structured_summary"
@@ -211,7 +224,8 @@ def make_representation(
         for attempt in range(config.max_attempts):
             generation_options = {
                 "structured_schema": structured_summary_schema(
-                    visible, token_budget=budget if bounded else None,
+                    visible, token_budget=budget if (bounded or compact) else None,
+                    text_bounds=not compact,
                 ),
             } if schema_mode else {}
             key, call = provider.generate(
@@ -243,7 +257,9 @@ def make_representation(
                     if schema_mode:
                         assembly_diagnostic["raw_measured_tokens"] = raw_measured
                         candidate = assemble_structured_summary(
-                            candidate, visible, token_budget=budget if bounded else None,
+                            candidate, visible,
+                            token_budget=budget if (bounded or compact) else None,
+                            text_bounds=not compact,
                         )
                         assembly_key = digest(_identity(
                             transcript, config, condition, repetition, "summary_assembly", attempt
@@ -294,6 +310,8 @@ def make_representation(
                 canaries=getattr(provider, "canaries", []),
                 **assembly_diagnostic,
                 **({"draft_limits": draft_limits(budget)} if bounded else {}),
+                **({"draft_limits": {"claims_per_field": 2, "references_per_claim": 2}}
+                   if compact else {}),
             ))
             if status == "ok" or reason == "token_count_failed":
                 break
@@ -307,7 +325,7 @@ def make_representation(
             # Repeat every constraint together, never feed the rejected candidate or
             # evaluator feedback into another request. The attempt limit stays fixed.
             request = _summary_request(
-                transcript, body, budget, regenerate=True, bounded=bounded,
+                transcript, body, budget, regenerate=True, bounded=bounded, compact=compact,
             )
         common["call_keys"] = keys
         if status != "ok":
@@ -346,6 +364,11 @@ def monitor_representation(
         ), []
     request = build_monitor_prompt(transcript, representation.text)
     visible = evidence_ids(representation.text) & {event.event_id for event in transcript.events}
+    generation_options = {}
+    if config.monitor_output_mode == "schema_visible_evidence_v1":
+        from context_audit.monitor_schema import monitor_response_schema
+
+        generation_options["structured_schema"] = monitor_response_schema(visible)
     calls, keys, status, decision = [], [], "invalid_output", None
     for attempt in range(config.max_attempts):
         key, call = provider.generate(
@@ -357,6 +380,7 @@ def monitor_representation(
             identity=_identity(
                 transcript, config, representation.condition, repetition, "monitor", attempt
             ),
+            **generation_options,
         )
         calls.append(call)
         keys.append(key)
@@ -727,6 +751,8 @@ def _run_locked(
                     t, body, summary_budget, regenerate=attempt > 0,
                     bounded=(fmt == "summary_structured"
                              and config.structured_summary_mode == "schema_citations_bounded_v1"),
+                    compact=(fmt == "summary_structured"
+                             and config.structured_summary_mode == "schema_citations_compact_v1"),
                 ),
             )
             for fmt in ("summary_free", "summary_structured")

@@ -7,8 +7,10 @@ head/tail text, a prose summary and a structured summary under a common
 per-example token ceiling.
 
 **Research status: Qwen development runs exist; the study is not complete.**
-The supplied v4 development artifacts contain 61 of 64 valid evaluation units.
-The current v5 amendment requires a fresh pilot and full development before
+The supplied v5 pilot records contain six structured-summary failures after
+12 request timeouts and one head/tail monitor citation failure. The current v6
+amendment adds compact citation decoding, monitor evidence constraints and a
+tokenizer-only latency gate. A fresh pilot and full development must precede
 reviewed held-out evaluation. Synthetic fixtures demonstrate engineering behavior
 only; superiority of structured summaries has not been established.
 The full scope is in the user-supplied [research plan](research_plan.md), and
@@ -29,6 +31,7 @@ run reports remain on the author's Drive.
 4. **Runtime → Run all** and allow Google Drive access when asked.
 
 The notebook checks the GPU, prepares its matching source and dependencies,
+checks the pinned tokenizer and decoder before downloading model weights,
 restores or acquires the official dataset, executes the selected stage, saves
 reports and disconnects the runtime. It prints one line per step, a progress line
 every 30 seconds while the model works and, if it stops, the error class and
@@ -48,7 +51,8 @@ The guided workflow also measures setup/report overhead; time outside the workfl
 still needs explicit accounting. Unknown monetary costs remain null. The GPU
 requires at least 75,000 MiB VRAM and native BF16; eligibility does not prove model
 fit or kernel compatibility. Default Run All is inert until the form is confirmed.
-The current summary-v5 GPU pilot remains pending. See the
+The current summary-v6 GPU pilot remains pending. Its CPU latency check is not
+GPU validation or evidence of improved monitoring. See the
 [version-specific changes and upload instructions](docs/qwen_colab.md).
 
 The local CPU environment remains lightweight; vLLM/CUDA are installed only in

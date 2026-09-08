@@ -30,7 +30,9 @@ def bounded_text_pattern(units: int) -> str:
     return rf'^([^"\\\x00-\x1f]|\\(["\\/bfnrt]|u[0-9a-fA-F]{{4}})){{0,{units}}}$'
 
 
-def structured_summary_schema(visible_ids: set[str], *, token_budget: int | None = None) -> dict:
+def structured_summary_schema(
+    visible_ids: set[str], *, token_budget: int | None = None, text_bounds: bool = True,
+) -> dict:
     """Return an independent schema; its claims, never an index, are model-generated."""
     if not visible_ids or any(
         not isinstance(event_id, str) or not re.fullmatch(r"E[0-9]{4,}", event_id)
@@ -66,7 +68,8 @@ def structured_summary_schema(visible_ids: set[str], *, token_budget: int | None
             array = schema["properties"][field]
             array["maxItems"] = limits["claims_per_field"]
             properties = array["items"]["properties"]
-            properties["text"]["pattern"] = bounded_text_pattern(limits["text_units"])
+            if text_bounds:
+                properties["text"]["pattern"] = bounded_text_pattern(limits["text_units"])
             properties["evidence_event_ids"]["maxItems"] = limits["references_per_claim"]
     return schema
 
@@ -107,6 +110,7 @@ def _validate_serialized_text_limits(raw_text: str, units: int) -> None:
 
 def assemble_structured_summary(
     raw_text: str, visible_ids: set[str], *, token_budget: int | None = None,
+    text_bounds: bool = True,
 ) -> str:
     """Append only model-selected citations; preserve claim text and never infer evidence."""
     try:
@@ -118,7 +122,7 @@ def assemble_structured_summary(
     if not isinstance(data, dict) or set(data) != set(CLAIM_FIELDS):
         raise ValueError("Structured draft fields do not match schema")
     limits = draft_limits(token_budget) if token_budget is not None else None
-    if limits:
+    if limits and text_bounds:
         _validate_serialized_text_limits(raw_text, limits["text_units"])
     cited, assembled = set(), {}
     for field in CLAIM_FIELDS:
@@ -146,7 +150,7 @@ def assemble_structured_summary(
             if not selected:
                 raise ValueError("Each structured claim requires a visible event citation")
             if limits and (
-                len(text) > limits["text_units"]
+                (text_bounds and len(text) > limits["text_units"])
                 or len(selected) > limits["references_per_claim"]
             ):
                 raise ValueError("Structured bounded draft limits exceeded")

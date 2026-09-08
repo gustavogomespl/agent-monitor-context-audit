@@ -591,7 +591,9 @@ def test_v6_uses_newest_valid_parent_without_changing_prior_artifacts(
     version = ns["source_workspace"]()
     actual = json.loads((version / "configuration/version.json").read_text())
     assert actual["parent"] == expected_parent
-    assert ns["phase_settings"]("pilot") == (f"pilot-summary-v6-ctx{expected_window}", expected_window)
+    assert ns["phase_settings"]("pilot") == (
+        f"pilot-summary-v6-ctx{expected_window}", expected_window
+    )
     parent = root if expected_parent == "legacy" else root / "versions" / expected_parent
     for relative in ("configuration/code-pin.json", "configuration/context/selection.json"):
         assert (version / relative).read_bytes() == (parent / relative).read_bytes()

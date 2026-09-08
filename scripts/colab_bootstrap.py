@@ -39,7 +39,7 @@ def source_workspace():
     """Only explicit development amendments get separate source workspaces."""
     if EXPERIMENT_VERSION == "legacy":
         return DRIVE_ROOT
-    if EXPERIMENT_VERSION in {"summary-v2", "summary-v3", "summary-v4", "summary-v5"}:
+    if EXPERIMENT_VERSION in {"summary-v2", "summary-v3", "summary-v4", "summary-v5", "summary-v6"}:
         return DRIVE_ROOT / "versions" / EXPERIMENT_VERSION
     raise ValueError("Unknown experiment version; choose the matching reviewed notebook.")
 
@@ -62,6 +62,7 @@ def prepare_version_workspace():
         "summary-v3": ("summary-v2",),
         "summary-v4": ("summary-v2", "summary-v3"),
         "summary-v5": ("summary-v2", "summary-v3", "summary-v4"),
+        "summary-v6": ("summary-v2", "summary-v3", "summary-v4", "summary-v5"),
     }[EXPERIMENT_VERSION]
     older_workspaces = [DRIVE_ROOT, *(
         DRIVE_ROOT / "versions" / version for version in previous_versions
@@ -105,7 +106,10 @@ def prepare_version_workspace():
     temporary = marker.with_suffix(".tmp")
     temporary.write_text(json.dumps({
         "experiment_version": EXPERIMENT_VERSION,
-        "reason": ("Development summary floor 1024 and bounded citation schema amendment; "
+        "reason": ("Development compact citation schema and visible-evidence monitor amendment; "
+                   "fresh complete pilot"
+                   if EXPERIMENT_VERSION == "summary-v6" else
+                   "Development summary floor 1024 and bounded citation schema amendment; "
                    "fresh complete pilot"
                    if EXPERIMENT_VERSION == "summary-v5" else
                    "Development summary cap 2048 amendment; fresh complete pilot"
@@ -373,7 +377,7 @@ def prepare_structured_outputs():
     import subprocess
     import sys
 
-    if EXPERIMENT_VERSION not in {"summary-v3", "summary-v4", "summary-v5"}:
+    if EXPERIMENT_VERSION not in {"summary-v3", "summary-v4", "summary-v5", "summary-v6"}:
         return {"status": "not_requested"}
     probe = subprocess.run(
         [sys.executable, "-m", "context_audit.structured_backend"], cwd=REPO,
@@ -387,6 +391,49 @@ def prepare_structured_outputs():
         raise RuntimeError("Citation decoder check returned an invalid receipt")
     print("STRUCTURED_OUTPUTS_OK — citation schema verified (xgrammar "
           + receipt["version"] + "); no model started.", flush=True)
+    return receipt
+
+
+def prepare_decoder_latency():
+    """Check the pinned tokenizer's complete mask vocabulary before loading weights."""
+    import json
+    import subprocess
+    import sys
+
+    if EXPERIMENT_VERSION != "summary-v6":
+        return {"status": "not_requested"}
+    pin = json.loads((DRIVE_ROOT / "configuration/model-pin.json").read_text())
+    print("Checking decoder latency with the pinned tokenizer only; "
+          "this check does not download or load model weights.", flush=True)
+    probe = subprocess.run(
+        [sys.executable, "-m", "context_audit.decoder_latency", "--model", pin["model_id"],
+         "--revision", pin["model_revision"]],
+        cwd=REPO, capture_output=True, text=True, timeout=180,
+    )
+    if probe.returncode:
+        diagnostic = probe.stderr or probe.stdout
+        try:
+            failed = json.loads(probe.stdout.strip().splitlines()[-1])
+            if isinstance(failed, dict) and failed.get("status") == "failed":
+                diagnostic = json.dumps(failed, sort_keys=True)
+        except (ValueError, IndexError):
+            pass
+        raise RuntimeError("Decoder latency check failed before model startup:\n"
+                           + diagnostic[-12000:])
+    try:
+        receipt = json.loads(probe.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError) as exc:
+        raise RuntimeError("Decoder latency check returned an invalid receipt") from exc
+    if receipt.get("status") != "passed" or receipt.get("model_generation_executed") is not False:
+        raise RuntimeError("Decoder latency check returned an invalid receipt")
+    path = source_workspace() / "configuration/decoder-latency.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(receipt, indent=2) + "\n")
+    temporary.replace(path)
+    print("DECODER_LATENCY_OK — vocabulary:", receipt.get("vocab_size"),
+          "| maximum mask seconds:", receipt.get("max_mask_seconds"),
+          "| tokenizer only; no model started.", flush=True)
     return receipt
 
 
@@ -541,13 +588,21 @@ def configured_phase(phase):
                           "development-v1" if EXPERIMENT_VERSION == "legacy" else
                           f"development-{EXPERIMENT_VERSION}"),
         structured_summary_mode=(
+            "schema_citations_compact_v1" if EXPERIMENT_VERSION == "summary-v6" else
             "schema_citations_bounded_v1" if EXPERIMENT_VERSION == "summary-v5" else
             "schema_citations_v1" if EXPERIMENT_VERSION in {"summary-v3", "summary-v4"}
             else "prompt"
         ),
-        token_minimum=1024 if EXPERIMENT_VERSION == "summary-v5" else 128,
-        token_maximum=2048 if EXPERIMENT_VERSION in {"summary-v4", "summary-v5"} else 1024,
-        summary_max_tokens=3200 if EXPERIMENT_VERSION in {"summary-v4", "summary-v5"} else 1600,
+        monitor_output_mode=(
+            "schema_visible_evidence_v1" if EXPERIMENT_VERSION == "summary-v6" else "prompt"
+        ),
+        token_minimum=1024 if EXPERIMENT_VERSION in {"summary-v5", "summary-v6"} else 128,
+        token_maximum=(
+            2048 if EXPERIMENT_VERSION in {"summary-v4", "summary-v5", "summary-v6"} else 1024
+        ),
+        summary_max_tokens=(
+            3200 if EXPERIMENT_VERSION in {"summary-v4", "summary-v5", "summary-v6"} else 1600
+        ),
         split="test" if phase == "test" else "development",
         dataset_dir="data/private",
         run_dir=str(phase_run_dir(phase)),
@@ -563,7 +618,8 @@ def configured_phase(phase):
     )
     path = source_workspace() / "configuration" / f"{name}.json"
     payload = config.model_dump()
-    if path.exists() and json.loads(path.read_text()) != payload:
+    if (path.exists()
+            and AuditConfig.model_validate(json.loads(path.read_text())).model_dump() != payload):
         raise ValueError(
             "This phase already has a different saved configuration. Preserve its results and "
             "use a new explicit workspace/version for changed methods."
@@ -647,7 +703,7 @@ def install_commands(pin):
     import sys
 
     dependencies = [f"vllm=={pin['vllm_version']}", "transformers>=5.8.0,<6"]
-    if EXPERIMENT_VERSION in {"summary-v3", "summary-v4", "summary-v5"}:
+    if EXPERIMENT_VERSION in {"summary-v3", "summary-v4", "summary-v5", "summary-v6"}:
         dependencies.append("xgrammar==0.2.3")
     if "runtime_versions" in pin:
         dependencies.extend(
@@ -710,6 +766,7 @@ def install_runtime():
     pin = verify_runtime_versions(pin_path, installed_versions)
     dependency_import_check = prepare_vllm_imports()
     structured_output_check = prepare_structured_outputs()
+    decoder_latency_check = prepare_decoder_latency()
     # CPU-visible provenance only; setup neither starts an engine nor queries a GPU.
     packages = subprocess.run(
         [sys.executable, "-m", "pip", "freeze"], capture_output=True, text=True, check=True
@@ -732,6 +789,7 @@ def install_runtime():
         "installed_packages": packages.splitlines(),
         "dependency_import_check": dependency_import_check,
         "structured_output_check": structured_output_check,
+        "decoder_latency_check": decoder_latency_check,
         "notebook_bootstrap_sha256": globals().get("NOTEBOOK_BOOTSTRAP_SHA256"),
     }
     (setup_history / f"{timestamp}.json").write_text(json.dumps(setup_record, indent=2) + "\n")
@@ -1023,7 +1081,9 @@ def execute_phase(config, seconds):
                     print(f"  {elapsed:.1f} min | successful evaluations: {good}/{total}",
                           flush=True)
                 else:
-                    print(f"  {elapsed:.1f} min | loading model / checking context lengths...",
+                    print(f"  {elapsed:.1f} min | awaiting the first evaluation; "
+                          "startup, context and inference details in this phase's "
+                          "gpu_sessions server/runner logs...",
                           flush=True)
             except (OSError, ValueError, KeyError):
                 pass  # A concurrent atomic score update will be read next time.

@@ -12,6 +12,70 @@ from context_audit.structured_summary import CLAIM_FIELDS, draft_limits, structu
 XGRAMMAR_VERSION = "0.2.3"
 
 
+def _check_compact_and_monitor(xgr, compiler) -> dict:
+    """Verify the v6 schemas' evidence and shape rules without a model call."""
+    from context_audit.monitor_schema import monitor_response_schema
+
+    visible = {"E0003", "E0004"}
+    schemas = {
+        "compact": structured_summary_schema(visible, token_budget=2048, text_bounds=False),
+        "monitor": monitor_response_schema(visible),
+        "empty_monitor": monitor_response_schema(set()),
+    }
+    compiled = {name: compiler.compile_json_schema(schema) for name, schema in schemas.items()}
+    accepted, rejected = 0, 0
+
+    def check(name, body, expected):
+        nonlocal accepted, rejected
+        matcher = xgr.GrammarMatcher(compiled[name])
+        actual = (
+            matcher.accept_string(json.dumps(body, ensure_ascii=True)) and matcher.is_completed()
+        )
+        if actual != expected:
+            raise ValueError("Compact/monitor decoder failed an independent schema check")
+        accepted += int(expected)
+        rejected += int(not expected)
+
+    claim = {"text": 'Exact "quote", \\ path, café\n😀. ' * 30,
+             "evidence_event_ids": ["E0003"]}
+    draft = {field: [copy.deepcopy(claim)] for field in CLAIM_FIELDS}
+    check("compact", draft, True)
+    for invalid in (
+        [{"text": "No references."}],
+        [{**claim, "evidence_event_ids": []}],
+        [{**claim, "evidence_event_ids": ["E9999"]}],
+        [{**claim, "evidence_event_ids": ["E0003"] * 3}],
+        [claim] * 3,
+    ):
+        example = copy.deepcopy(draft)
+        example[CLAIM_FIELDS[0]] = invalid
+        check("compact", example, False)
+    monitor = {
+        "suspicion_score": 12.5, "brief_justification": claim["text"],
+        "evidence_event_ids": ["E0003"], "uncertainties": [],
+    }
+    check("monitor", monitor, True)
+    check("monitor", {**monitor, "evidence_event_ids": []}, True)
+    check("empty_monitor", {**monitor, "evidence_event_ids": []}, True)
+    check("empty_monitor", monitor, False)
+    for change in (
+        {"evidence_event_ids": ["E9999"]}, {"suspicion_score": 101},
+        {"suspicion_score": -1}, {"suspicion_score": "12.5"}, {"extra": "invalid"},
+    ):
+        check("monitor", {**monitor, **change}, False)
+    missing = dict(monitor)
+    del missing["uncertainties"]
+    check("monitor", missing, False)
+    return {
+        "accepted_cases": accepted, "rejected_cases": rejected,
+        "schema_hashes": {
+            name: hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()
+            for name, schema in schemas.items()
+        },
+        "model_generation_executed": False,
+    }
+
+
 def _check_bounded_schema(xgr, compiler, token_budget: int) -> dict:
     """Falsify structural decoder bounds with fixed, independent synthetic strings."""
     schema = structured_summary_schema({"E0003", "E0004"}, token_budget=token_budget)
@@ -167,6 +231,7 @@ def check_structured_backend() -> dict:
         "schema_sha256": hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(),
         "accepted_cases": 2, "rejected_cases": rejected, "model_generation_executed": False,
         "bounded_checks": [_check_bounded_schema(xgr, compiler, budget) for budget in (1024, 2048)],
+        "compact_and_monitor_checks": _check_compact_and_monitor(xgr, compiler),
     }
 
 

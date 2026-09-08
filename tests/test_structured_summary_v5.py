@@ -172,8 +172,9 @@ def test_full_history_stays_integral_in_bounded_mode(tmp_path):
     assert rep.text == render_body(transcript) and not calls
 
 
+@pytest.mark.parametrize("mode", ["schema_citations_bounded_v1", "schema_citations_compact_v1"])
 def test_preflight_counts_bounded_initial_and_retry_requests_before_generation(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, mode,
 ):
     import context_audit.dataset as dataset
     import context_audit.qwen_provider as qwen_provider
@@ -196,6 +197,7 @@ def test_preflight_counts_bounded_initial_and_retry_requests_before_generation(
     source = synthetic_transcript()
     provider = InventoryBoundary(PrivateStore(tmp_path), [])
     cfg = bounded_config().model_copy(update={
+        "structured_summary_mode": mode,
         "run_dir": str(tmp_path), "qwen": QwenConfig(
             model_revision="1" * 40, gpu_budget_hours=12,
         ),
@@ -210,7 +212,10 @@ def test_preflight_counts_bounded_initial_and_retry_requests_before_generation(
         )
     bounded_requests = [r for r in provider.requests_counted if "Decoder limits:" in r]
     assert len(bounded_requests) == 2
-    assert all("512" in r for r in bounded_requests)
+    if mode == "schema_citations_bounded_v1":
+        assert all("512" in r for r in bounded_requests)
+    else:
+        assert all("at most 2" in r and "JSON text units" not in r for r in bounded_requests)
     assert sum("Regenerate once" in r for r in bounded_requests) == 1
     inventory = json.loads((tmp_path / "manifests/preflight.json").read_text())
     assert inventory["items"][0]["summary_input_tokens"] == 900

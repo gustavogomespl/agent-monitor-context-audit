@@ -1,10 +1,11 @@
 # Agent Monitor Context Audit
 
-> **Current Qwen development version: summary-v5.** Its amendment below adds
-> bounded structured drafts, a common 1,024-token minimum with the existing
-> 2,048-token maximum, and safe termination diagnostics. Earlier amendments and
-> the original proposal remain historical context. Development validation failures
-> motivated the change; held-out scores did not. The new GPU run is pending.
+> **Current Qwen development version: summary-v6.** Its amendment below removes
+> the v5 per-claim text bound, retains compact claim/reference limits, constrains
+> monitor citations to each representation's visible evidence and adds a full-vocabulary
+> tokenizer-only decoder latency gate. Budgets remain unchanged from v5. Earlier
+> amendments and the original proposal remain historical context. Development
+> failures motivated the change; held-out scores did not. The v6 GPU run is pending.
 
 > **Infrastructure amendment — 2026-09-06 (English repository note).** The author
 > requested adapting the experiment to `Qwen/Qwen3.8-27B` on a Colab H100 and
@@ -185,6 +186,66 @@
 > Codex implemented this author-requested exploratory amendment with parallel AI
 > assistance and independent synthetic checks. Offline validation is not evidence
 > of successful v5 inference, better coverage or improved monitoring quality.
+
+> **Development amendment — summary-v6 (2026-09-07).** The author supplied private
+> v5 pilot records and authorized fixing structured-decoder latency and monitor
+> citation validity. All six structured-summary units failed after 12 `ReadTimeout`
+> attempts at the unchanged 300-second request timeout. One head/tail monitor output
+> cited an ID absent from its visible representation. These development failures,
+> not held-out scores, motivated the amendment. No private text or example IDs are
+> reproduced in this note. Earlier v5 settings and records remain historical.
+>
+> Qwen now uses `structured_summary_mode="schema_citations_compact_v1"`. It retains
+> the four arrays of typed claim objects, required nonempty visible-event reference
+> lists, at most two claims per field and at most two references per claim. It
+> removes the per-claim text-length pattern and both serialized/decoded local
+> text-length bounds introduced in v5. Text must still be nonblank and all cited IDs
+> must be valid. Deterministic assembly preserves accepted wording and appends only
+> model-selected citations; it never slices, drops or repairs claims.
+>
+> The common body ceiling remains
+> `B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`. Bodies of at most 1,024
+> tokens retain the short-input identity path. Both summary conditions retain the
+> 60–80% target, 3,200-token raw allowance and at most two attempts. The final
+> validator counts every assembled field and citation with the exact monitor
+> tokenizer. Removing the per-claim bound permits longer claims; an oversized
+> final representation still fails, retains a null score and escalates after the
+> allowed retry. `full` remains complete; monitor output remains capped at 700.
+>
+> The new `monitor_output_mode="schema_visible_evidence_v1"` applies to all four
+> conditions and both monitor attempts. Its evidence-ID enum is derived from the
+> actual representation shown to that monitor, not the full source transcript when
+> evidence was omitted. An empty visible set permits only an empty evidence list.
+> The monitor retains its existing rubric, continuous 0–100 score and other output
+> fields. The model selects citations; no ID is fabricated, substituted or repaired.
+> The unchanged local validator remains a final check. Syntactic citation validity
+> does not establish that a cited event supports the conclusion. Older configs
+> default to the historical `prompt` monitor mode.
+>
+> Before weights download/startup, the v6 setup runs a CPU semantic decoder check
+> and a separate latency gate with the exact pinned tokenizer/config and full model
+> vocabulary. The gate exercises real token acceptance and mask filling, including
+> Unicode, for the production summary and monitor schemas. Every measured mask must
+> take at most 0.25 seconds. The private receipt records the model revision,
+> vocabulary size, schema hashes and measured timings. Failure stops setup without
+> an unconstrained fallback. This check does not load weights, generate model text,
+> measure GPU throughput or attest to successful v6 inference.
+>
+> All 24 pilot evaluations start afresh in isolated `summary-v6` runs. First setup
+> inherits the newest valid v5, v4, v3, v2 or legacy source pin and measured context.
+> Data, opaque IDs, family split, model/tokenizer/runtime pins and the remaining
+> shared 12-hour allowance are retained. Prior source, configurations, calls, caches,
+> numeric results and budget receipts are preserved and are never reused as v6
+> responses. Any earlier frozen workspace or test-run evidence blocks creation.
+> Full development and explicit reviewed test freezing remain required.
+>
+> This changes the structured intervention and the monitor decoding contract across
+> all four conditions. Earlier and v6 outcomes cannot isolate the causal effect of
+> one change. The author authorized this exploratory amendment; Codex implemented
+> it with parallel AI assistance and independent synthetic checks. Offline checks
+> and tokenizer latency measurements do not establish improved coverage, monitoring
+> quality or completion within the remaining GPU allowance. No live generation or
+> publication is implied by the implementation.
 
 ## Plano de pesquisa e implementação para o Codex
 

@@ -597,3 +597,78 @@ public files. These checks are not real v5 inference, evidence of improved score
 or a guarantee of GPU completion. Delivery is
 `dist/qwen_colab_summary_v5_<hash>.ipynb`, with empty execution outputs. No live
 generation, commit, public push or publication is performed by this change.
+
+
+## 2026-09-07: author-authorized summary-v6 decoder latency and visible monitor evidence
+
+The supplied private v5 pilot had no successful structured-summary units out of
+six: all 12 attempts ended in `ReadTimeout` at the fixed 300-second request
+limit. A head/tail monitor also selected an evidence ID absent from its visible
+representation. The author authorized a new exploratory version to address these
+development failures. Held-out outcomes did not guide the change; public files
+and tests contain no benchmark text or private example identifiers.
+
+A representative CPU mask diagnostic measured approximately 5.3 seconds with the
+v5 text-length pattern and approximately 11 microseconds without it. This
+isolated decoder diagnostic is evidence of a plausible bottleneck; it does not
+measure v6 GPU throughput or establish that all historical timeouts share that
+cause. A small-vocabulary compile/match check alone had not exercised production
+vocabulary mask cost. V6 therefore adds a separate full-vocabulary latency gate.
+
+`structured_summary_mode="schema_citations_compact_v1"` keeps the typed citation
+draft, at most two claims per field and at most two selected references per claim.
+It removes the per-claim pattern and both serialized/decoded local text-length
+bounds. Nonblank text, required nonempty reference lists, visible-ID validation,
+all four fields and rejection of extra properties remain enforced. Assembly
+preserves accepted wording and indexes only model-selected citations; it never
+trims, removes, adds or rewrites claims to fit.
+
+The exact final body ceiling remains
+`B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))` for head/tail and both
+summaries, with identity handling at or below 1,024 tokens. Both summarizers retain
+a 3,200-token raw allowance, 60–80% target and two-attempt maximum. Monitor output
+remains 700 tokens and `full` is never truncated. Removing the text bound can
+produce longer claims. The exact final validator still counts every field and
+citation; persistent oversized or otherwise invalid outputs retain null scores
+and escalate. Rejected outputs, validator errors and evaluator labels stay out
+of retry input. Historical v5 behavior is retained under its original mode.
+
+`monitor_output_mode="schema_visible_evidence_v1"` applies schema decoding on both
+attempts in all four conditions. The evidence enum comes only from IDs visible in
+the actual monitor representation, including compression omissions. With no visible
+IDs only an empty evidence list is allowed. The existing continuous 0–100 score,
+monitor rubric and output fields remain unchanged. No citation is fabricated,
+substituted or repaired, and the final local validator remains authoritative.
+This enforces ID membership, not semantic support for the conclusion. Older
+configs default to `prompt`; loading their configs for comparison does not rewrite
+saved bytes or turn prior responses into v6 evidence.
+
+After dependency imports and the semantic decoder probe, v6 executes
+`python -m context_audit.decoder_latency --model MODEL_ID --revision PINNED_SHA`
+in a fresh CPU subprocess with a 180-second deadline. It uses the exact pinned
+tokenizer/config and full vocabulary without downloading/loading model weights.
+Production summary and monitor schema probes perform real token acceptance and
+mask filling, including Unicode. A measured mask above 0.25 seconds fails setup;
+there is no unconstrained fallback. The private receipt records the pinned
+revision, vocabulary size, schema hashes and timings in
+`versions/summary-v6/configuration/decoder-latency.json` and setup history.
+The check repeats on reconnect and its changing timings do not block a matching
+configuration. A passed receipt is not model generation, a GPU attestation or
+evidence of improved monitoring quality.
+
+The new namespace reruns all 24 pilot evaluations with fresh calls and caches.
+Source/context inheritance prefers v5, then v4, v3, v2 and legacy. Source pins,
+data, IDs, family split, measured context, model/tokenizer/runtime pins and the
+remaining shared 12-hour GPU allowance survive. Earlier source, configs, calls,
+caches, scores and accounting receipts are preserved. An earlier freeze or test
+run blocks creation. Full development and explicit reviewed freezing remain
+required before held-out test.
+
+This amendment changes both the structured intervention and monitor decoding in
+all conditions; across-version results cannot isolate either change's causal
+effect. Codex implemented the author-requested amendment with parallel AI
+assistance and independent synthetic checks. No v6 GPU result, improved coverage,
+score gain or completion within the remaining allowance is established. Delivery
+uses `dist/qwen_colab_summary_v6_<hash>.ipynb` with empty outputs; the Colab badge
+continues to load the published branch until the new artifact is published.
+Implementation does not authorize live generation, public push or publication.

@@ -69,7 +69,7 @@ def vllm_command(config: AuditConfig) -> list[str]:
         "--default-chat-template-kwargs",
         '{"enable_thinking":false,"preserve_thinking":false}',
     ]
-    if config.structured_summary_mode != "prompt":
+    if config.structured_summary_mode != "prompt" or config.monitor_output_mode != "prompt":
         command.extend(["--structured-outputs-config.backend", "xgrammar"])
     return command
 
@@ -512,7 +512,7 @@ def run_colab_experiment(
     if config.qwen.runtime_versions != runtime_versions:
         raise ValueError("Inference packages differ from the saved runtime pin; rerun Colab setup")
     hardware = _hardware()
-    if config.structured_summary_mode != "prompt":
+    if config.structured_summary_mode != "prompt" or config.monitor_output_mode != "prompt":
         from context_audit.structured_backend import check_structured_backend
 
         hardware["structured_outputs"] = check_structured_backend()

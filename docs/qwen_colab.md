@@ -4,7 +4,7 @@
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gustavogomespl/agent-monitor-context-audit/blob/pilot/notebooks/03_qwen_colab.ipynb)
 
-1. Upload the supplied `dist/qwen_colab_summary_v5_<hash>.ipynb` with
+1. Upload the supplied `dist/qwen_colab_summary_v6_<hash>.ipynb` with
    **File → Upload notebook**, or upload the rebuilt `notebooks/03_qwen_colab.ipynb`.
    The badge above loads the committed notebook from `pilot`; it reflects this
    version only after the rebuilt notebook is published.
@@ -22,7 +22,73 @@ reporting. It saves the report to Drive and releases GPU allocation at the end,
 including setup/error paths. Default Run All without confirmed form fields prints
 the unchecked fields and does not mount Drive or execute an experiment.
 
-## Current development amendment: summary-v5
+## Current development amendment: summary-v6
+
+Use the supplied v6 notebook with **STAGE = pilot** and the same Drive workspace.
+Confirm data use and rubric review, then **START_RUN**; all three are initially
+false. The test-review checkbox also remains false and is only needed for test.
+The header must show `Experiment: summary-v6`. All 24 pilot evaluations are fresh
+v6 calls. Review the complete pilot before selecting full development; held-out
+test remains a separate reviewed and frozen stage.
+
+The supplied v5 pilot had six structured-summary failures after 12 `ReadTimeout`
+attempts at 300 seconds, plus one head/tail monitor citation failure. V6 addresses
+these development failures; its GPU success and monitoring quality remain untested.
+
+`schema_citations_compact_v1` retains at most two claims per field and two selected
+visible-event references per claim. It removes v5's per-claim text-length pattern
+and local text-length bounds. Nonblank text, valid references, deterministic
+assembly and the exact final token validator remain required. Removing the text
+bound allows longer claims; it does not guarantee that the final summary fits.
+No claim is cut or rewritten to fit. Failed final outputs retain null scores and
+escalate after at most two attempts.
+
+The shared body rule remains
+`B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`, including the unchanged
+identity path for bodies of at most 1,024 tokens. Both summary conditions keep
+the 60–80% target and 3,200-token raw allowance. Full history stays complete and
+monitor output remains capped at 700 tokens. Retries receive the original input
+and generic requirements, without rejected drafts, validation errors or labels.
+
+`monitor_output_mode="schema_visible_evidence_v1"` constrains evidence IDs to those
+actually visible in the representation being monitored, for every condition and
+both attempts. Empty visible evidence permits an empty evidence list only. The
+existing rubric, continuous 0–100 score and other fields remain unchanged. The
+model chooses the evidence; the application does not invent or repair citations.
+An allowed ID can still support an incorrect conclusion, so decoder validity is
+not evidence of faithful monitoring. Older versions keep their original modes.
+
+Before downloading or loading weights, setup verifies the decoder semantically
+and checks token-mask latency using the pinned tokenizer/config and its full
+vocabulary. This CPU check exercises real token acceptance, mask filling and
+Unicode with production summary and monitor schemas. Each mask must take at most
+0.25 seconds; any failure stops setup. It does not load weights or generate model
+text and does not validate GPU throughput. `DECODER_LATENCY_OK` reports vocabulary
+size and the maximum measured mask time. The private receipt at
+`versions/summary-v6/configuration/decoder-latency.json` and setup history record
+the revision, schema hashes and timings. Reconnects repeat the check without
+requiring identical timing values.
+
+Drive paths are `versions/summary-v6/`,
+`runs-private/qwen-pilot-summary-v6-ctx196608/`, `numeric-results/summary-v6/pilot/`
+and `runs-private/notebook-status/summary-v6/` when inheriting the measured
+196,608-token context. The report is
+`numeric-results/summary-v6/pilot/reproduced/findings.md`. First setup prefers
+v5 source/context provenance, then v4, v3, v2 and legacy. The same data, IDs,
+family split, model/tokenizer/runtime pins and remaining 12-hour budget are used.
+Earlier source, configs, caches and results stay intact and are not v6 responses.
+Any earlier freeze or test evidence blocks creating this development amendment.
+
+See the [v6 protocol amendment](../research_plan.md) and [decision record](decisions.md)
+for the scientific scope, failure limits and AI assistance. The Colab badge loads
+the published branch and can still point to an older notebook until v6 is published;
+upload the supplied v6 artifact to use the local reviewed version.
+
+## Historical development amendment: summary-v5
+
+This section records the v5 design and status when implemented. V6 supersedes its
+active paths, per-claim text bounds and monitor decoding mode; v5 records remain
+unchanged.
 
 Use the supplied new notebook, keep **STAGE = pilot** and the existing Drive
 workspace, confirm the three initial checkboxes, then select **Run all**. The
@@ -193,9 +259,11 @@ live coverage or better monitoring performance; the authorized pilot must test t
   | Shared budget: 12 GPU hours`, then one `[n/6]` line per step. A CPU runtime
   stops at step 1 with the runtime-type fix, before Drive is mounted.
 - Dependency installation is quiet; only pip errors and warnings are printed.
-- During inference, a line every 30 seconds: model loading, then
-  `successful evaluations: k/n`. The first session downloads about 55 GB of weights
-  before scoring starts.
+- Before weights, `STRUCTURED_OUTPUTS_OK` verifies decoder semantics and
+  `DECODER_LATENCY_OK` reports the tokenizer-only mask timings. Failure stops setup.
+- During inference, a line every 30 seconds: awaiting the first evaluation,
+  then `successful evaluations: k/n`. Startup details remain in the phase's private
+  server/runner logs. The first session downloads about 55 GB of weights before scoring.
 - When context recovery is needed, `Context inventory: ... maximum request plus output:
   ... Context: 65536 -> ...` shows the measured requirement and selected window.
   A saved inventory is reused before model startup; a new token-only context failure
@@ -229,25 +297,25 @@ No public push occurs.
 The default private folder is `My Drive/agent-monitor-context-audit-private`.
 The final cell prints full paths. For each phase:
 
-- `numeric-results/summary-v4/<phase>/public_scores.csv`: sanitized numeric rows.
-- `numeric-results/summary-v4/<phase>/reproduced/findings.md`: report.
-- `numeric-results/summary-v4/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
-- `runs-private/notebook-status/summary-v4/latest.json`: workflow status and output locations.
-- `runs-private/notebook-status/summary-v4/last-error.log`: last full private diagnostic.
-- `runs-private/qwen-<phase>-summary-v4-ctx196608/gpu_sessions/server_logs/`
+- `numeric-results/summary-v6/<phase>/public_scores.csv`: sanitized numeric rows.
+- `numeric-results/summary-v6/<phase>/reproduced/findings.md`: report.
+- `numeric-results/summary-v6/<phase>/reproduced/metrics.json` and `figures/`: metrics and charts.
+- `runs-private/notebook-status/summary-v6/latest.json`: workflow status and output locations.
+- `runs-private/notebook-status/summary-v6/last-error.log`: last full private diagnostic.
+- `runs-private/qwen-<phase>-summary-v6-ctx196608/gpu_sessions/server_logs/`
   and `runner_logs/`: engine/worker logs when inheriting the saved 196,608-token window.
 
 After a context adjustment, active run directories have a `-ctx<tokens>` suffix.
 The original attempt remains intact. The suffix reflects the actual saved window;
 a workspace without a prior context choice initially has no context suffix.
-Earlier legacy, `summary-v2` and `summary-v3` numeric results, run directories and
+Earlier legacy, `summary-v2`, `summary-v3`, `summary-v4` and `summary-v5` results and
 source workspaces stay unchanged. The printed diagnostic paths identify the
 selected version.
 
-`versions/summary-v4/` contains this version's configuration, context selection,
+`versions/summary-v6/` contains this version's configuration, context selection,
 source pin, durable Git metadata, source receipts and eventual frozen snapshot.
 First setup inherits the newest valid parent source pin and context selection from
-`summary-v3`, then `summary-v2`, then the legacy workspace. Reconnects retain the
+`summary-v5`, then `summary-v4`, `summary-v3`, `summary-v2` and legacy. Reconnects retain the
 new version's own copies. Source files and Git metadata are isolated from earlier
 versions.
 The parent `configuration/model-pin.json`,
@@ -394,9 +462,9 @@ new context choice still needs an authorized GPU pilot.
 
 To resume the reported failure, upload the rebuilt notebook, keep the current Drive
 folder and `STAGE = pilot`, confirm the form, then select **Run all**. There is no
-context variable to edit and no configuration file to delete. For `summary-v4`,
-the newest valid existing selection is inherited from summary-v3, then summary-v2,
-then legacy; it is not recomputed from earlier generation failures. The larger
+context variable to edit and no configuration file to delete. For `summary-v6`,
+the newest valid existing selection is inherited from summary-v5, then summary-v4,
+summary-v3, summary-v2 and legacy; it is not recomputed from earlier generation failures. The larger
 output allowances remain subject to exact request-token preflight validation.
 
 ### Model, hardware and sampling
@@ -412,8 +480,8 @@ latency and GPU cost cannot be compared as if hardware were identical.
 The author reported PyTorch 2.13.0+cu130, CUDA 13.0 and a passing small BF16 matrix
 multiplication on SM120. That diagnostic checked basic PyTorch execution only;
 later private pilot records reached model generation, including the 23-of-24
-summary-v3 pilot. The revised summary-v4 budgets still need their own authorized
-GPU pilot. Keep vLLM's automatic attention selection and the existing BF16
+summary-v3 pilot and later v4/v5 development runs. The revised summary-v6
+decoding contracts still need their own authorized GPU pilot. Keep vLLM's automatic attention selection and the existing BF16
 configuration.
 
 The only Qwen model is `Qwen/Qwen3.8-27B`, shared by independent monitor and
