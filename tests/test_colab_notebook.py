@@ -129,20 +129,21 @@ def test_all_colab_phases_carry_the_saved_runtime_fingerprint(tmp_path, monkeypa
         DATA_USE_CONFIRMED=True,
         RUBRIC_REVIEWED=True,
     )
-    assert namespace["EXPERIMENT_VERSION"] == "summary-v5"
-    assert namespace["REPO"] == Path("/content/agent-monitor-context-audit-summary-v5")
+    assert namespace["EXPERIMENT_VERSION"] == "summary-v6"
+    assert namespace["REPO"] == Path("/content/agent-monitor-context-audit-summary-v6")
     namespace["prepare_version_workspace"]()
     configuration = namespace["source_workspace"]() / "configuration"
     for phase in ("pilot", "development", "test"):
         config = namespace["configured_phase"](phase)
         assert config.qwen.runtime_versions == versions
-        assert config.structured_summary_mode == "schema_citations_bounded_v1"
+        assert config.structured_summary_mode == "schema_citations_compact_v1"
+        assert config.monitor_output_mode == "schema_visible_evidence_v1"
         assert config.token_maximum == 2048 and config.summary_max_tokens == 3200
         assert config.token_fraction == 0.25 and config.token_minimum == 1024
         assert config.qwen.gpu_budget_hours == 12.0
         assert config.qwen.gpu_hourly_rate_usd is None
         assert config.timeout_seconds == 300
-        saved = json.loads((configuration / f"{phase}-summary-v5.json").read_text())
+        saved = json.loads((configuration / f"{phase}-summary-v6.json").read_text())
         assert saved["qwen"]["runtime_versions"] == versions
         assert saved["qwen"]["gpu_budget_hours"] == 12.0
 
@@ -155,3 +156,24 @@ def test_readme_and_guide_link_the_hosted_notebook():
     )
     for name in ("README.md", "docs/qwen_colab.md"):
         assert link in (root / name).read_text(), name
+
+
+def test_builder_defaults_start_an_inert_v6_pilot(tmp_path, monkeypatch, capsys):
+    import runpy
+
+    root = NOTEBOOK.parents[1]
+    builder = runpy.run_path(str(root / "scripts/build_qwen_notebook.py"))
+    namespace = {}
+    monkeypatch.chdir(tmp_path)
+    exec(builder["FORM"], namespace)
+    exec(builder["ADVANCED"], namespace)
+    exec((root / "scripts/colab_bootstrap.py").read_text(), namespace)
+    result = namespace["run_guided"]()
+    assert result["status"] == "not_started"
+    assert namespace["EXPERIMENT_VERSION"] == "summary-v6"
+    assert namespace["REPO"] == Path("/content/agent-monitor-context-audit-summary-v6")
+    assert namespace["STAGE"] == "pilot"
+    for setting in ("DATA_USE_CONFIRMED", "RUBRIC_REVIEWED", "DEVELOPMENT_REVIEWED", "START_RUN"):
+        assert namespace[setting] is False
+    assert list(tmp_path.iterdir()) == []
+    assert "Run all" in capsys.readouterr().out
