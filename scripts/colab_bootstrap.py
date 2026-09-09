@@ -387,8 +387,11 @@ def prepare_structured_outputs():
         "summary-v3", "summary-v4", "summary-v5", "summary-v6", "summary-v7",
     }:
         return {"status": "not_requested"}
+    command = [sys.executable, "-m", "context_audit.structured_backend"]
+    if EXPERIMENT_VERSION == "summary-v7":
+        command.append("--separate-ids")
     probe = subprocess.run(
-        [sys.executable, "-m", "context_audit.structured_backend"], cwd=REPO,
+        command, cwd=REPO,
         capture_output=True, text=True, timeout=120,
     )
     if probe.returncode:
@@ -405,6 +408,7 @@ def prepare_structured_outputs():
 def prepare_decoder_latency():
     """Check the pinned tokenizer's complete mask vocabulary before loading weights."""
     import json
+    import math
     import subprocess
     import sys
 
@@ -421,6 +425,25 @@ def prepare_decoder_latency():
         command,
         cwd=REPO, capture_output=True, text=True, timeout=180,
     )
+    if EXPERIMENT_VERSION == "summary-v7":
+        try:
+            failed = json.loads(probe.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            failed = None
+        if (isinstance(failed, dict) and failed.get("status") == "failed"
+                and failed.get("model_generation_executed") is False):
+            import uuid
+
+            directory = source_workspace() / "configuration/decoder-latency-failures"
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"{uuid.uuid4().hex}.json"
+            with path.open("x", encoding="utf-8") as saved:
+                saved.write(json.dumps(failed, indent=2, ensure_ascii=False) + "\n")
+            diagnostic = json.dumps(failed, sort_keys=True)
+            raise RuntimeError(
+                "Decoder latency check failed before model startup:\n"
+                + f"Full private decoder receipt: {path}\n" + diagnostic[-12000:]
+            )
     if probe.returncode:
         diagnostic = probe.stderr or probe.stdout
         try:
@@ -440,14 +463,29 @@ def prepare_decoder_latency():
     if (EXPERIMENT_VERSION == "summary-v7"
             and receipt.get("structured_summary_mode") != "schema_citations_separate_ids_v1"):
         raise RuntimeError("Decoder latency receipt does not match the v7 production schema")
+    if (EXPERIMENT_VERSION == "summary-v7"
+            and receipt.get("mask_gate_policy") != "two_fast_confirmations_v1"):
+        raise RuntimeError("Decoder latency receipt does not match the v7 confirmation policy")
+    if EXPERIMENT_VERSION == "summary-v7":
+        confirmed = receipt.get("max_gate_mask_seconds")
+        if (isinstance(confirmed, bool) or not isinstance(confirmed, (int, float))
+                or not math.isfinite(confirmed) or not 0 <= confirmed <= 0.25
+                or receipt.get("mask_gate_seconds") != 0.25):
+            raise RuntimeError("Decoder latency receipt has invalid confirmed mask timing")
     path = source_workspace() / "configuration/decoder-latency.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(receipt, indent=2) + "\n")
     temporary.replace(path)
-    print("DECODER_LATENCY_OK — vocabulary:", receipt.get("vocab_size"),
-          "| maximum mask seconds:", receipt.get("max_mask_seconds"),
-          "| tokenizer only; no model started.", flush=True)
+    if EXPERIMENT_VERSION == "summary-v7":
+        print("DECODER_LATENCY_OK — vocabulary:", receipt.get("vocab_size"),
+              "| raw maximum mask seconds:", receipt.get("max_mask_seconds"),
+              "| confirmed gate maximum mask seconds:", receipt.get("max_gate_mask_seconds"),
+              "| tokenizer only; no model started.", flush=True)
+    else:
+        print("DECODER_LATENCY_OK — vocabulary:", receipt.get("vocab_size"),
+              "| maximum mask seconds:", receipt.get("max_mask_seconds"),
+              "| tokenizer only; no model started.", flush=True)
     return receipt
 
 

@@ -162,6 +162,7 @@ _SUMMARY_VALIDATION_REASONS = {
     "Structured bounded draft limits exceeded": "draft_length_bounds_exceeded",
     "Structured draft contains invalid Unicode": "invalid_draft_unicode",
     "Structured claim text must not contain event IDs": "inline_claim_event_id",
+    "Structured claim text must use literal non-control Unicode": "noncanonical_claim_unicode",
 }
 
 

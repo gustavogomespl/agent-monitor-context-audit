@@ -24,7 +24,7 @@ def test_separate_ids_request_preserves_identifier_and_selected_evidence(tmp_pat
     text = 'Exact CODE1234, café, "quote" and \\ path.'
     fields["important_identifiers"][0]["text"] = text
     store = PrivateStore(tmp_path)
-    provider = SyntheticProvider(store, [json.dumps(fields)])
+    provider = SyntheticProvider(store, [json.dumps(fields, ensure_ascii=False)])
     rep, calls = make_representation(
         synthetic_transcript(), "structured_summary", cfg, provider, store, 0, 196608,
     )

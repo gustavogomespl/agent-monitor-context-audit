@@ -8,6 +8,7 @@ from test_colab_runtime import qwen_config
 
 @pytest.mark.parametrize('mode', [
     'schema_citations_v1', 'schema_citations_bounded_v1', 'schema_citations_compact_v1',
+    'schema_citations_separate_ids_v1',
 ])
 def test_schema_mode_pins_decoder_backend_without_changing_ordinary_launch(mode):
     from context_audit.colab import vllm_command
@@ -40,13 +41,16 @@ def test_real_cpu_grammar_accepts_citations_and_rejects_missing_references():
     pytest.importorskip('xgrammar')
     from context_audit.structured_backend import check_structured_backend
 
-    result = check_structured_backend()
+    result = check_structured_backend(include_separate_ids=True)
     assert result['status'] == 'passed'
     assert result['version'] == '0.2.3'
     assert result['rejected_cases'] >= 12
     assert result['model_generation_executed'] is False
     assert result['compact_and_monitor_checks']['accepted_cases'] >= 4
     assert result['compact_and_monitor_checks']['rejected_cases'] >= 8
+    assert result['separate_ids_checks']['accepted_cases'] >= 8
+    assert result['separate_ids_checks']['rejected_cases'] >= 12
+    assert result['separate_ids_checks']['model_generation_executed'] is False
     bounded = result['bounded_checks']
     assert [check['token_budget'] for check in bounded] == [1024, 2048]
     assert [check['limits']['text_units'] for check in bounded] == [256, 512]

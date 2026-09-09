@@ -47,6 +47,12 @@ adds only the citations chosen by the model. It never fills in a missing referen
 rewrites a claim or removes text to make an invalid output pass. Valid citation
 format is separate from whether an event supports the claim.
 
+Claim prose uses literal non-control Unicode characters. Normal JSON escapes for
+quotes, backslashes and controls remain supported. This canonical serialization
+prevents Unicode escapes from hiding an event ID; it adds no text-length ceiling
+and does not rewrite accepted decoded prose. Ordinary identifiers containing a
+similar substring remain valid when they are not standalone event-ID tokens.
+
 The common final body rule remains
 `B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`. At or below 1,024 tokens,
 all compressed conditions reuse the body unchanged. Both summarizers retain the
@@ -60,9 +66,17 @@ The v6 monitor mode, rubric, continuous 0–100 scores, 700-token monitor allowa
 visible-evidence ID constraints and all model/runtime pins stay unchanged. Before
 weights load, the semantic decoder probe and tokenizer-only full-vocabulary gate
 check the v7 production schema. The gate explicitly selects the v7 mode and its
-receipt must identify that same mode. Each mask must take at most 0.25 seconds;
-any failure stops setup without fallback. A passed CPU gate does not validate GPU
-throughput or monitoring quality. Its private receipt is
+receipt must identify that mode and `two_fast_confirmations_v1`. If an initial
+mask measurement exceeds 0.25 seconds, two fresh matchers and bitmasks rebuild
+the same accepted-token prefix for independent confirmation measurements. Both
+confirmations must meet the same 0.25-second limit; either slow confirmation stops
+setup without fallback. All raw timings are saved, and
+`DECODER_LATENCY_OK` prints the raw maximum and confirmed gate maximum separately.
+The 120-second profile and 150-second worker deadlines remain unchanged. This
+handles an isolated CPU scheduling spike while retaining the latency threshold;
+v6 keeps its original single-measurement policy. Setup also verifies a finite
+confirmed maximum within the unchanged limit. A passed CPU gate does not
+validate GPU throughput or monitoring quality. Its private receipt is
 `versions/summary-v7/configuration/decoder-latency.json`.
 
 With the inherited 196,608-token context, the new run directory is
@@ -320,7 +334,8 @@ live coverage or better monitoring performance; the authorized pilot must test t
 
 ## What the output looks like
 
-- A header line: `Stage: pilot | Workspace: … | Model: Qwen/Qwen3.8-27B (vLLM 0.28.0)
+- A version line: `Experiment: summary-v7 | Notebook build: …`, then
+  `Stage: pilot | Workspace: … | Model: Qwen/Qwen3.8-27B (vLLM 0.28.0)
   | Shared budget: 12 GPU hours`, then one `[n/6]` line per step. A CPU runtime
   stops at step 1 with the runtime-type fix, before Drive is mounted.
 - Dependency installation is quiet; only pip errors and warnings are printed.
@@ -373,15 +388,15 @@ The final cell prints full paths. For each phase:
 After a context adjustment, active run directories have a `-ctx<tokens>` suffix.
 The original attempt remains intact. The suffix reflects the actual saved window;
 a workspace without a prior context choice initially has no context suffix.
-Earlier legacy, `summary-v2`, `summary-v3`, `summary-v4`, `summary-v5` and `summary-v6` results and
-source workspaces stay unchanged. The printed diagnostic paths identify the
+Earlier legacy, `summary-v2`, `summary-v3`, `summary-v4`, `summary-v5` and
+`summary-v6` results and source workspaces stay unchanged. The printed diagnostic paths identify the
 selected version.
 
 `versions/summary-v7/` contains this version's configuration, context selection,
 source pin, durable Git metadata, source receipts and eventual frozen snapshot.
 First setup inherits the newest valid parent source pin and context selection from
-`summary-v6`, then `summary-v5`, `summary-v4`, `summary-v3`, `summary-v2` and legacy. Reconnects retain the
-new version's own copies. Source files and Git metadata are isolated from earlier
+`summary-v6`, then `summary-v5`, `summary-v4`, `summary-v3`, `summary-v2` and legacy.
+Reconnects retain the new version's own copies. Source files and Git metadata are isolated from earlier
 versions.
 The parent `configuration/model-pin.json`,
 `data-private/` and `runs-private/gpu_budget/` remain shared; versioning does not

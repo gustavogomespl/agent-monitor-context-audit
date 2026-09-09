@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
 from context_audit.monitor_schema import monitor_response_schema
 from context_audit.structured_summary import structured_summary_schema
@@ -104,30 +105,115 @@ def _check_deadline(started: float) -> None:
         raise TimeoutError("Decoder latency diagnostic exceeded its total deadline")
 
 
-def _measure_mask(matcher, bitmask, started: float, *, profile: str, position: int) -> float:
-    _check_deadline(started)
-    before = time.perf_counter()
-    try:
-        matcher.fill_next_token_bitmask(bitmask)
-    except Exception as exc:
-        raise DecoderLatencyError(
-            "native_mask_failed", phase="mask", profile=profile, position=position,
-            exception_type=_exception_type(exc),
-        ) from exc
-    elapsed = time.perf_counter() - before
-    if elapsed > MAX_MASK_SECONDS:
-        raise DecoderLatencyError(
-            "mask_latency", phase="mask", profile=profile, position=position,
-            mask_seconds=elapsed, mask_gate_seconds=MAX_MASK_SECONDS,
+def _measure_mask(
+    matcher, bitmask, started: float, *, profile: str, position: int,
+    confirm_spikes: bool = False, mask_timings: list | None = None,
+    latency_spikes: list | None = None, confirmation_factory: Callable | None = None,
+) -> float:
+    """Keep raw timings; v7 can confirm a spike with two fresh equal-prefix matchers."""
+    timings = [] if mask_timings is None else mask_timings
+    spikes = [] if latency_spikes is None else latency_spikes
+
+    def fail(reason: str, **details) -> DecoderLatencyError:
+        return DecoderLatencyError(
+            reason, phase="mask", profile=profile, position=position,
+            mask_gate_seconds=MAX_MASK_SECONDS, mask_measurements_seconds=list(timings),
+            mask_calls=len(timings), latency_spikes=spikes,
+            mask_gate_policy=(
+                "two_fast_confirmations_v1" if confirm_spikes else "single_measurement_v1"
+            ), **details,
         )
-    _check_deadline(started)
+
+    def deadline() -> None:
+        try:
+            _check_deadline(started)
+        except TimeoutError as exc:
+            if not confirm_spikes:
+                raise
+            raise fail("total_deadline", exception_type=_exception_type(exc)) from exc
+
+    def once(current_matcher, current_mask, confirmations: list | None = None) -> float:
+        deadline()
+        before = time.perf_counter()
+        try:
+            current_matcher.fill_next_token_bitmask(current_mask)
+        except Exception as exc:
+            elapsed = time.perf_counter() - before
+            timings.append(elapsed)
+            if confirmations is not None:
+                confirmations.append(elapsed)
+            raise fail("native_mask_failed", exception_type=_exception_type(exc)) from exc
+        elapsed = time.perf_counter() - before
+        timings.append(elapsed)
+        if confirmations is not None:
+            confirmations.append(elapsed)
+        return elapsed
+
+    elapsed = once(matcher, bitmask)
+    if elapsed > MAX_MASK_SECONDS:
+        if not confirm_spikes:
+            raise fail("mask_latency", mask_seconds=elapsed)
+        spike = {
+            "initial_mask_index": len(timings) - 1, "initial_mask_seconds": elapsed,
+            "confirmation_mask_seconds": [], "confirmed": False,
+        }
+        spikes.append(spike)
+        for _ in range(2):
+            deadline()
+            if confirmation_factory is None:
+                raise fail("missing_confirmation_factory")
+            try:
+                fresh_matcher, fresh_mask = confirmation_factory()
+            except TimeoutError as exc:
+                raise fail("total_deadline", exception_type=_exception_type(exc)) from exc
+            except Exception as exc:
+                raise fail(
+                    "confirmation_replay_failed", exception_type=_exception_type(exc),
+                ) from exc
+            confirmation = once(fresh_matcher, fresh_mask, spike["confirmation_mask_seconds"])
+            if confirmation > MAX_MASK_SECONDS:
+                raise fail("mask_latency", mask_seconds=confirmation)
+            deadline()
+        spike["confirmed"] = True
+    deadline()
     return elapsed
 
 
 def _profile_schema(xgr, compiler, tokenizer, schema: dict, *, name: str,
-                    vocab_size: int, started: float, extra_suffixes: tuple = ()) -> dict:
+                    vocab_size: int, started: float, extra_suffixes: tuple = (),
+                    confirm_spikes: bool = False) -> dict:
     """Measure full-vocabulary masks after real token ingestion at bounded positions."""
-    _check_deadline(started)
+    results, total_tokens = [], 0
+    active = None
+    durations, spikes, replay_calls = [], [], 0
+
+    def enrich_failure(exc):
+        current = [] if active is None else [{
+            "position": active[0], "text_kind": active[1], "mask_seconds": durations,
+            "latency_spikes": spikes, "confirmation_replay_token_calls": replay_calls,
+        }]
+        exc.receipt["positions"] = [*results, *current]
+        exc.receipt["mask_calls"] = sum(
+            len(case["mask_seconds"]) for case in exc.receipt["positions"]
+        )
+        exc.receipt["accepted_token_calls"] = total_tokens
+        exc.receipt["confirmation_replay_token_calls"] = sum(
+            case["confirmation_replay_token_calls"] for case in exc.receipt["positions"]
+        )
+        return exc
+
+    def profile_deadline():
+        try:
+            _check_deadline(started)
+        except TimeoutError as exc:
+            if not confirm_spikes:
+                raise
+            raise enrich_failure(DecoderLatencyError(
+                "total_deadline", phase="profile", profile=name,
+                exception_type=_exception_type(exc), mask_gate_policy="two_fast_confirmations_v1",
+            )) from exc
+
+    profile_deadline()
     before = time.perf_counter()
     try:
         compiled = compiler.compile_json_schema(schema)
@@ -137,7 +223,7 @@ def _profile_schema(xgr, compiler, tokenizer, schema: dict, *, name: str,
             exception_type=_exception_type(exc),
         ) from exc
     compile_seconds = time.perf_counter() - before
-    _check_deadline(started)
+    profile_deadline()
     bitmask = xgr.allocate_token_bitmask(1, vocab_size)
     prefixes = {
         "summary": '{"environment_and_state":[{"text":"',
@@ -150,10 +236,11 @@ def _profile_schema(xgr, compiler, tokenizer, schema: dict, *, name: str,
     single = tokenizer.encode("a", add_special_tokens=False)
     if len(single) != 1 or tokenizer.decode(single) != "a":
         raise ValueError("Tokenizer cannot supply the expected synthetic sequential token")
-    results, total_tokens = [], 0
     for position in POSITIONS:
         extras = extra_suffixes if position == 0 else ()
         for kind, suffix in (("ascii", ""), ("json_escapes", escaped), *extras):
+            active = (position, kind)
+            durations, spikes, replay_calls = [], [], 0
             matcher = xgr.GrammarMatcher(compiled)
             text = prefix + "a" * position + suffix
             tokens = tokenizer.encode(text, add_special_tokens=False)
@@ -162,34 +249,69 @@ def _profile_schema(xgr, compiler, tokenizer, schema: dict, *, name: str,
             ) != text:
                 raise ValueError("Synthetic prefix tokenization is not exact and bounded")
             accept_seconds = 0.0
+            accepted = list(tokens)
             for token in tokens:
-                _check_deadline(started)
+                profile_deadline()
                 before = time.perf_counter()
+                total_tokens += 1
                 if not matcher.accept_token(token):
                     raise ValueError("Decoder rejected a valid synthetic token prefix")
                 accept_seconds += time.perf_counter() - before
-            total_tokens += len(tokens)
+
+            def fresh_confirmation():
+                nonlocal accept_seconds, total_tokens, replay_calls
+                _check_deadline(started)
+                if len(accepted) > 4096:
+                    raise ValueError("Confirmation prefix exceeds bounded replay length")
+                fresh = xgr.GrammarMatcher(compiled)
+                fresh_mask = xgr.allocate_token_bitmask(1, vocab_size)
+                for token in accepted:
+                    _check_deadline(started)
+                    before = time.perf_counter()
+                    replay_calls += 1
+                    total_tokens += 1
+                    if not fresh.accept_token(token):
+                        raise ValueError("Confirmation rejected the same synthetic token prefix")
+                    accept_seconds += time.perf_counter() - before
+                    _check_deadline(started)
+                return fresh, fresh_mask
+
             # Repeated masks and subsequent changing states exercise both paths.
-            durations = [
-                _measure_mask(matcher, bitmask, started, profile=name, position=position)
-                for _ in range(3)
-            ]
+            def measure():
+                try:
+                    return _measure_mask(
+                        matcher, bitmask, started, profile=name, position=position,
+                        confirm_spikes=confirm_spikes, mask_timings=durations,
+                        latency_spikes=spikes, confirmation_factory=fresh_confirmation,
+                    )
+                except DecoderLatencyError as exc:
+                    # Failed diagnostics retain prior cases and every completed
+                    # initial/confirmation measurement, not just the final spike.
+                    enrich_failure(exc)
+                    raise
+
+            for _ in range(3):
+                measure()
             steps = 0 if (kind, suffix) in extras else SEQUENTIAL_STEPS
             for _ in range(steps):
-                durations.append(_measure_mask(
-                    matcher, bitmask, started, profile=name, position=position,
-                ))
+                measure()
                 before = time.perf_counter()
                 if not matcher.accept_token(single[0]):
                     raise ValueError("Decoder rejected a valid synthetic sequential token")
                 accept_seconds += time.perf_counter() - before
                 total_tokens += 1
-                _check_deadline(started)
+                accepted.append(single[0])
+                profile_deadline()
+            excluded = {spike["initial_mask_index"] for spike in spikes if spike["confirmed"]}
+            gate_timings = [value for index, value in enumerate(durations) if index not in excluded]
             results.append({
                 "position": position, "text_kind": kind, "prefix_tokens": len(tokens),
                 "sequential_steps": steps, "mask_seconds": durations,
-                "accept_token_seconds": accept_seconds,
+                "accept_token_seconds": accept_seconds, "latency_spikes": spikes,
+                "confirmation_replay_token_calls": replay_calls,
+                "max_gate_mask_seconds": max(gate_timings),
             })
+            active = None
     timings = [duration for result in results for duration in result["mask_seconds"]]
     return {
         "name": name,
@@ -197,6 +319,14 @@ def _profile_schema(xgr, compiler, tokenizer, schema: dict, *, name: str,
         "compile_seconds": compile_seconds, "positions": results,
         "mask_calls": len(timings), "accepted_token_calls": total_tokens,
         "max_mask_seconds": max(timings), "total_mask_seconds": sum(timings),
+        "max_gate_mask_seconds": max(result["max_gate_mask_seconds"] for result in results),
+        "mask_gate_policy": (
+            "two_fast_confirmations_v1" if confirm_spikes else "single_measurement_v1"
+        ),
+        "confirmation_state_policy": "fresh_matcher_prefix_replay_v1" if confirm_spikes else None,
+        "confirmation_replay_token_calls": sum(
+            result["confirmation_replay_token_calls"] for result in results
+        ),
     }
 
 
@@ -219,22 +349,43 @@ def check_decoder_latency(
         ),
         "monitor": monitor_response_schema(visible_ids),
     }
-    profiles = [
-        _profile_schema(
-            xgr, compiler, tokenizer, schema, name=name,
-            vocab_size=info.vocab_size, started=started,
-            extra_suffixes=(
-                tuple((f"event_prefix_{i}", " " + suffix) for i, suffix in enumerate((
-                    "E", "E0", "E00", "E000", "E0000", "caféE0000", "E٠٠٠٠",
-                )))
-                if name == "summary"
-                and structured_summary_mode == "schema_citations_separate_ids_v1"
-                else ()
+    profiles = []
+    for name, schema in schemas.items():
+        try:
+            profile = _profile_schema(
+                xgr, compiler, tokenizer, schema, name=name,
+                vocab_size=info.vocab_size, started=started,
+                confirm_spikes=structured_summary_mode == "schema_citations_separate_ids_v1",
+                extra_suffixes=(
+                    tuple((f"event_prefix_{i}", " " + suffix) for i, suffix in enumerate((
+                        "E", "E0", "E00", "E000", "E0000", "caféE0000", "E٠٠٠٠",
+                    )))
+                    if name == "summary"
+                    and structured_summary_mode == "schema_citations_separate_ids_v1"
+                    else ()
+                ),
+            )
+        except DecoderLatencyError as exc:
+            exc.receipt["completed_profiles"] = profiles
+            for key in ("mask_calls", "accepted_token_calls", "confirmation_replay_token_calls"):
+                exc.receipt[key] = exc.receipt.get(key, 0) + sum(p[key] for p in profiles)
+            raise
+        profiles.append(profile)
+    try:
+        _check_deadline(started)
+    except TimeoutError as exc:
+        if structured_summary_mode != "schema_citations_separate_ids_v1":
+            raise
+        raise DecoderLatencyError(
+            "total_deadline", phase="diagnostic", exception_type=_exception_type(exc),
+            completed_profiles=profiles,
+            mask_calls=sum(profile["mask_calls"] for profile in profiles),
+            accepted_token_calls=sum(profile["accepted_token_calls"] for profile in profiles),
+            confirmation_replay_token_calls=sum(
+                profile["confirmation_replay_token_calls"] for profile in profiles
             ),
-        )
-        for name, schema in schemas.items()
-    ]
-    _check_deadline(started)
+            mask_gate_policy="two_fast_confirmations_v1",
+        ) from exc
     return {
         "status": "passed", "model_generation_executed": False,
         "model": model, "tokenizer_revision": revision,
@@ -244,11 +395,20 @@ def check_decoder_latency(
         "visible_event_count": len(visible_ids), "runtime_versions": versions,
         "machine": platform.machine(), "python_version": platform.python_version(),
         "max_mask_seconds": max(profile["max_mask_seconds"] for profile in profiles),
+        "max_gate_mask_seconds": max(profile["max_gate_mask_seconds"] for profile in profiles),
+        "mask_gate_policy": (
+            "two_fast_confirmations_v1"
+            if structured_summary_mode == "schema_citations_separate_ids_v1"
+            else "single_measurement_v1"
+        ),
         "mask_gate_seconds": MAX_MASK_SECONDS, "total_gate_seconds": MAX_PROFILE_SECONDS,
         "hard_timeout_seconds": HARD_TIMEOUT_SECONDS,
         "elapsed_seconds": time.perf_counter() - started,
         "mask_calls": sum(profile["mask_calls"] for profile in profiles),
         "accepted_token_calls": sum(profile["accepted_token_calls"] for profile in profiles),
+        "confirmation_replay_token_calls": sum(
+            profile["confirmation_replay_token_calls"] for profile in profiles
+        ),
         "profiles": profiles,
     }
 

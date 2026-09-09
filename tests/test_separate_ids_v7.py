@@ -71,7 +71,7 @@ def test_unicode_escape_cannot_hide_an_inline_reference(ensure_ascii):
     raw = json.dumps(draft("E0003"), ensure_ascii=ensure_ascii)
     for encoded in [r"\u00450003", r"E\u0030003", r"\u0045\u0030\u0030\u0030\u0033"]:
         with pytest.raises(ValueError, match="Structured claim text must not contain event IDs"):
-            assemble(raw.replace('"E0003",', '"E0003",').replace(
+            assemble(raw.replace(
                 '"text": "E0003"', '"text": "' + encoded + '"',
             ))
 
@@ -80,6 +80,8 @@ def test_unicode_escape_cannot_hide_an_inline_reference(ensure_ascii):
     'Exact "quote", \\ path, café\n雪 🧪. ', "CODE1234", "E123", "E0003suffix",
     "éE0003", "E0003é", "E0003_", "123E0003", "E²³¹⁴", "e0003",
     "Literal text key: \"text\": \"preserve it\".", "Long ordinary prose. " * 60,
+    r"The literal sequence \u0045 is retained.", "E0003漢字", "漢字E0003",
+    "𱋥E0003", "E0003𱋥", "흍E0003", "E0003흍",
 ])
 def test_normal_identifiers_unicode_and_long_prose_are_preserved(text):
     raw = json.dumps(draft(text, ["E0004", "E0003"]), ensure_ascii=False)
@@ -126,12 +128,26 @@ def test_historical_inline_citations_are_still_valid():
         assert assemble_structured_summary(raw, {"E0003"}, **options)
 
 
+def test_separation_cannot_silently_replace_historical_character_bounds():
+    with pytest.raises(ValueError, match="require compact prose"):
+        structured_summary_schema({"E0003"}, token_budget=2048, citations_in_text=False)
+    with pytest.raises(ValueError, match="require compact prose"):
+        assemble_structured_summary(
+            json.dumps(draft()), {"E0003"}, token_budget=2048, citations_in_text=False,
+        )
+
+
 def test_actual_xgrammar_prose_semantics_when_optional_backend_is_installed():
     xgr = pytest.importorskip("xgrammar")
     compiler = xgr.GrammarCompiler(xgr.TokenizerInfo([]))
     compiled = compiler.compile_json_schema(schema())
-    for text in ["CODE1234", "E0003suffix", "café 🧪", 'a "quote" \\ path\nline', "éE0003"]:
-        assert xgr.GrammarMatcher(compiled).accept_string(json.dumps(draft(text), ensure_ascii=False))
+    for text in [
+        "CODE1234", "E0003suffix", "café 🧪", 'a "quote" \\ path\nline', "éE0003",
+        "𱋥E0003", "E0003𱋥", "흍E0003", "E0003흍",
+    ]:
+        assert xgr.GrammarMatcher(compiled).accept_string(
+            json.dumps(draft(text), ensure_ascii=False),
+        )
     for text in ["[E0003]", "E0003", "E１２３４", "E0003😀"]:
         assert not xgr.GrammarMatcher(compiled).accept_string(
             json.dumps(draft(text), ensure_ascii=False),

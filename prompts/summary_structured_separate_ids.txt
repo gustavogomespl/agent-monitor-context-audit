@@ -10,6 +10,8 @@ when comparing events or describing contradictions and missing information.
 Use descriptions such as "the earlier tool result" or "the agent's subsequent
 assertion" to preserve chronology and attribution. Preserve important observed
 identifiers literally; do not replace a missing identifier with an event label.
+In text, emit non-control Unicode characters literally, not as Unicode escape
+sequences. Normal JSON quote, backslash and control-character escapes remain valid.
 
 For EACH claim, select the nonempty list of visible events supporting that claim
 in evidence_event_ids. Select evidence for both sides when contrasting an agent

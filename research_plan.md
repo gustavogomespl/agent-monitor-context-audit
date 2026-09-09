@@ -273,6 +273,14 @@
 > evaluator information to choose references. Citation format cannot establish that
 > a selected event semantically supports a claim.
 >
+> The unbounded prose grammar recognizes standalone event-ID tokens with Unicode
+> word/digit boundaries; identifiers containing similar substrings remain prose.
+> For claim text, the decoder and local lexical check require non-control Unicode
+> characters literally, rather than Unicode escape sequences that could conceal an
+> ID. Normal JSON quote, slash, backslash and control escapes remain supported,
+> including Unicode escapes for control characters. This is a serialization
+> constraint, not a character-count ceiling; accepted decoded prose is preserved.
+>
 > No per-claim text-length bound is restored. Head/tail and both summaries retain
 > `B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`, with identity handling for
 > bodies of at most 1,024 tokens. Both summarizers keep the 60–80% target and
@@ -290,10 +298,22 @@
 > The semantic decoder check and full-vocabulary tokenizer-only latency gate cover
 > the v7 production schema before downloading or loading model weights. The
 > latency subprocess is explicitly told `schema_citations_separate_ids_v1`; v7
-> setup rejects a receipt reporting another mode or no mode. The existing
-> 0.25-second per-mask threshold, bounded setup deadline and failure-without-fallback
-> policy remain in force. Private receipts record mode, schema hashes, revision
-> and timings. These CPU checks are not GPU throughput or monitoring-quality tests.
+> setup rejects a receipt reporting another mode or no mode. V7 uses the explicit
+> `two_fast_confirmations_v1` mask policy: an initial measurement above 0.25 seconds
+> triggers two confirmations, each with a fresh matcher and bitmask rebuilt from
+> the same accepted-token prefix; both must be at or below 0.25 seconds. Either
+> slow confirmation fails setup.
+> All raw timings, including initial spikes, remain in the receipt; the raw maximum
+> and confirmed gate maximum are reported separately. This avoids treating an
+> isolated scheduling delay as sustained decoder latency. Direct CPU diagnosis
+> observed one 437.879 ms wall-time measurement with 145.449 ms thread CPU time;
+> that observation is not a GPU benchmark. The 120-second profile and 150-second
+> worker deadlines remain unchanged. V6 retains its original single-measurement
+> policy. V7 setup requires the exact mode and confirmation-policy receipt, a
+> finite nonnegative confirmed maximum at or below 0.25 seconds, and the unchanged
+> 0.25-second gate threshold, with no fallback. Private records retain schema hashes, revision and timings. These
+> CPU checks are not GPU throughput or monitoring-quality tests and change no
+> generated-text contract, score or inference retry identity.
 >
 > All 24 pilot units start afresh in isolated `summary-v7` calls, caches and results.
 > First setup inherits the newest valid v6, v5, v4, v3, v2 or legacy source/context

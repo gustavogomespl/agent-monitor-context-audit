@@ -27,21 +27,30 @@ class ToyTokenizer:
         return "".join(chr(token) for token in tokens)
 
 
-def fake_runtime(monkeypatch, latency, *, mask_seconds=0.001, reject_token=False):
+def fake_runtime(
+    monkeypatch, latency, *, mask_seconds=0.001, reject_token=False, mask_prefixes=None,
+):
     clock = [0.0]
     operations = {"masks": 0, "tokens": 0}
+    scripted = iter(mask_seconds) if isinstance(mask_seconds, list) else None
 
     class Matcher:
         def __init__(self, compiled):
-            pass
+            self.tokens = []
 
         def accept_token(self, token):
             operations["tokens"] += 1
+            self.tokens.append(token)
             return not reject_token
 
         def fill_next_token_bitmask(self, bitmask):
             operations["masks"] += 1
-            clock[0] += mask_seconds
+            if mask_prefixes is not None:
+                mask_prefixes.append((self, list(self.tokens)))
+            elapsed = next(scripted, 0.001) if scripted is not None else mask_seconds
+            if isinstance(elapsed, Exception):
+                raise elapsed
+            clock[0] += elapsed
             return True
 
     monkeypatch.setattr(latency.time, "perf_counter", lambda: clock[0])
@@ -83,6 +92,177 @@ def test_slow_first_mask_fails_before_further_iterations_without_sleep(monkeypat
     assert caught.value.receipt["mask_gate_seconds"] == 0.25
     assert caught.value.receipt["profile"] == "monitor"
     assert caught.value.receipt["position"] == 0
+
+
+def test_v7_transient_spike_requires_two_fast_same_state_masks_and_records_all_calls(
+    monkeypatch, latency,
+):
+    prefixes = []
+    xgr, compiler, tokenizer, operations, _ = fake_runtime(
+        monkeypatch, latency, mask_seconds=[0.437, 0.145, 0.080],
+        mask_prefixes=prefixes,
+    )
+    result = latency._profile_schema(
+        xgr, compiler, tokenizer, {}, name="summary", vocab_size=248320,
+        started=0, confirm_spikes=True,
+    )
+    assert operations["masks"] == result["mask_calls"] == 282
+    assert len({id(item[0]) for item in prefixes[:3]}) == 3
+    assert prefixes[0][1] == prefixes[1][1] == prefixes[2][1]
+    assert result["max_mask_seconds"] == pytest.approx(0.437)
+    assert result["max_gate_mask_seconds"] == pytest.approx(0.145)
+    assert result["mask_gate_policy"] == "two_fast_confirmations_v1"
+    first = result["positions"][0]
+    assert result["confirmation_replay_token_calls"] == 2 * first["prefix_tokens"]
+    assert result["accepted_token_calls"] == operations["tokens"]
+    assert first["confirmation_replay_token_calls"] == 2 * first["prefix_tokens"]
+    assert first["mask_seconds"][:3] == pytest.approx([0.437, 0.145, 0.080])
+    assert len(first["mask_seconds"]) == 37
+    assert first["latency_spikes"] == [{
+        "initial_mask_index": 0,
+        "initial_mask_seconds": pytest.approx(0.437),
+        "confirmation_mask_seconds": pytest.approx([0.145, 0.080]),
+        "confirmed": True,
+    }]
+
+
+@pytest.mark.parametrize("measurements,expected_calls", [
+    ([0.437, 0.251], 2), ([0.437, 0.080, 0.251], 3), ([0.437, 0.437], 2),
+])
+def test_v7_any_slow_confirmation_fails_and_keeps_measured_times(
+    monkeypatch, latency, measurements, expected_calls,
+):
+    xgr, compiler, tokenizer, operations, _ = fake_runtime(
+        monkeypatch, latency, mask_seconds=measurements,
+    )
+    with pytest.raises(latency.DecoderLatencyError) as caught:
+        latency._profile_schema(
+            xgr, compiler, tokenizer, {}, name="summary", vocab_size=248320,
+            started=0, confirm_spikes=True,
+        )
+    assert operations["masks"] == expected_calls
+    assert caught.value.receipt["reason_code"] == "mask_latency"
+    assert caught.value.receipt["mask_measurements_seconds"] == pytest.approx(measurements)
+    spike = caught.value.receipt["latency_spikes"][0]
+    assert not spike["confirmed"]
+    assert spike["confirmation_mask_seconds"] == pytest.approx(measurements[1:])
+
+
+def test_v7_confirmation_native_error_fails_without_leaking_exception_text(monkeypatch, latency):
+    xgr, compiler, tokenizer, operations, _ = fake_runtime(
+        monkeypatch, latency, mask_seconds=[0.437, RuntimeError("SYNTHETIC_PRIVATE_DETAIL")],
+    )
+    with pytest.raises(latency.DecoderLatencyError) as caught:
+        latency._profile_schema(
+            xgr, compiler, tokenizer, {}, name="summary", vocab_size=248320,
+            started=0, confirm_spikes=True,
+        )
+    assert operations["masks"] == 2
+    assert caught.value.receipt["reason_code"] == "native_mask_failed"
+    assert caught.value.receipt["exception_type"] == "RuntimeError"
+    assert "SYNTHETIC_PRIVATE_DETAIL" not in json.dumps(caught.value.receipt)
+
+
+def test_v7_confirmation_deadline_still_fails(monkeypatch, latency):
+    xgr, compiler, tokenizer, operations, clock = fake_runtime(
+        monkeypatch, latency, mask_seconds=[0.251, 0.200, 0.100],
+    )
+    clock[0] = 119.6
+    with pytest.raises(latency.DecoderLatencyError) as caught:
+        latency._profile_schema(
+            xgr, compiler, tokenizer, {}, name="summary", vocab_size=248320,
+            started=0, confirm_spikes=True,
+        )
+    assert operations["masks"] == 2
+    assert caught.value.receipt["reason_code"] == "total_deadline"
+    assert caught.value.receipt["mask_measurements_seconds"] == pytest.approx([0.251, 0.200])
+
+
+def test_v7_fresh_replay_includes_tokens_accepted_after_the_initial_prefix(monkeypatch, latency):
+    prefixes = []
+    xgr, compiler, tokenizer, operations, _ = fake_runtime(
+        monkeypatch, latency, mask_seconds=[0.001] * 5 + [0.437, 0.080, 0.090],
+        mask_prefixes=prefixes,
+    )
+    result = latency._profile_schema(
+        xgr, compiler, tokenizer, {}, name="summary", vocab_size=248320,
+        started=0, confirm_spikes=True,
+    )
+    assert len({id(item[0]) for item in prefixes[5:8]}) == 3
+    assert prefixes[5][1] == prefixes[6][1] == prefixes[7][1] == prefixes[0][1] + [ord("a")] * 2
+    assert result["confirmation_replay_token_calls"] == 2 * len(prefixes[5][1])
+    assert result["accepted_token_calls"] == operations["tokens"]
+
+
+def test_v7_failing_later_case_preserves_earlier_case_mask_measurements(monkeypatch, latency):
+    xgr, compiler, tokenizer, operations, _ = fake_runtime(
+        monkeypatch, latency, mask_seconds=[0.001] * 35 + [0.437, 0.251],
+    )
+    with pytest.raises(latency.DecoderLatencyError) as caught:
+        latency._profile_schema(
+            xgr, compiler, tokenizer, {}, name="summary", vocab_size=248320,
+            started=0, confirm_spikes=True,
+        )
+    receipt = caught.value.receipt
+    assert receipt["mask_calls"] == operations["masks"] == 37
+    assert len(receipt["positions"]) == 2
+    assert receipt["positions"][0]["mask_seconds"] == pytest.approx([0.001] * 35)
+    assert receipt["positions"][1]["mask_seconds"] == pytest.approx([0.437, 0.251])
+    assert receipt["accepted_token_calls"] == operations["tokens"]
+
+
+def test_v7_confirmation_prefix_replay_failure_is_fatal(monkeypatch, latency):
+    xgr, compiler, tokenizer, operations, _ = fake_runtime(
+        monkeypatch, latency, mask_seconds=[0.437],
+    )
+    original = xgr.GrammarMatcher
+    instances = []
+
+    def matcher(compiled):
+        instance = original(compiled)
+        instances.append(instance)
+        if len(instances) == 2:
+            instance.accept_token = lambda token: False
+        return instance
+
+    xgr.GrammarMatcher = matcher
+    with pytest.raises(latency.DecoderLatencyError) as caught:
+        latency._profile_schema(
+            xgr, compiler, tokenizer, {}, name="summary", vocab_size=248320,
+            started=0, confirm_spikes=True,
+        )
+    assert operations["masks"] == 1
+    assert caught.value.receipt["reason_code"] == "confirmation_replay_failed"
+
+
+def test_v7_deadline_after_sequential_token_preserves_all_completed_masks(monkeypatch, latency):
+    xgr, compiler, tokenizer, operations, clock = fake_runtime(monkeypatch, latency)
+    original = xgr.GrammarMatcher
+
+    def matcher(compiled):
+        instance = original(compiled)
+        accept = instance.accept_token
+
+        def consume(token):
+            result = accept(token)
+            if operations["masks"] == 4:
+                clock[0] = 121
+            return result
+
+        instance.accept_token = consume
+        return instance
+
+    xgr.GrammarMatcher = matcher
+    with pytest.raises(latency.DecoderLatencyError) as caught:
+        latency._profile_schema(
+            xgr, compiler, tokenizer, {}, name="summary", vocab_size=248320,
+            started=0, confirm_spikes=True,
+        )
+    receipt = caught.value.receipt
+    assert receipt["reason_code"] == "total_deadline"
+    assert receipt["mask_calls"] == operations["masks"] == 4
+    assert receipt["positions"][0]["mask_seconds"] == pytest.approx([0.001] * 4)
+    assert receipt["accepted_token_calls"] == operations["tokens"]
 
 
 def test_total_deadline_fails_before_compiling_or_masking(monkeypatch, latency):
@@ -192,6 +372,8 @@ def test_receipt_profiles_both_schemas_with_512_visible_ids(monkeypatch, latency
     assert receipt["config_revision_pin"] == "a" * 40
     assert receipt["loaded_config_revision"] is None
     assert receipt["max_mask_seconds"] == pytest.approx(0.001)
+    assert receipt["max_gate_mask_seconds"] == pytest.approx(0.001)
+    assert receipt["mask_gate_policy"] == "single_measurement_v1"
     assert {profile["name"] for profile in receipt["profiles"]} == {"summary", "monitor"}
     assert receipt["mask_calls"] == 560
 
@@ -211,9 +393,97 @@ def test_v7_latency_receipt_binds_the_selected_production_schema(monkeypatch, la
     )
     assert receipt["structured_summary_mode"] == "schema_citations_separate_ids_v1"
     assert receipt["status"] == "passed"
+    assert receipt["mask_calls"] == 581
+    assert receipt["mask_gate_policy"] == "two_fast_confirmations_v1"
+    assert {profile["mask_gate_policy"] for profile in receipt["profiles"]} == {
+        "two_fast_confirmations_v1"
+    }
+    assert receipt["confirmation_replay_token_calls"] == 0
+    prefixes = [
+        case for case in receipt["profiles"][0]["positions"]
+        if case["text_kind"].startswith("event_prefix_")
+    ]
+    assert len(prefixes) == 7
+    assert all(case["position"] == 0 and case["sequential_steps"] == 0 for case in prefixes)
     assert compiled_schemas[0]["properties"]["environment_and_state"]["items"][
         "properties"
     ]["text"]["pattern"]
+
+
+@pytest.mark.parametrize("initial_fast_masks", [0, 301])
+def test_v7_receipt_confirms_spikes_for_summary_and_monitor(
+    monkeypatch, latency, initial_fast_masks,
+):
+    xgr, compiler, tokenizer, operations, _ = fake_runtime(
+        monkeypatch, latency, mask_seconds=[0.001] * initial_fast_masks + [0.437, 0.080, 0.090],
+    )
+    xgr.GrammarCompiler = lambda info, **kwargs: compiler
+    monkeypatch.setattr(latency, "_load_runtime", lambda *args: (
+        xgr, tokenizer, SimpleNamespace(vocab_size=248320), {"xgrammar": "0.2.3"},
+        {"config_revision_pin": "a" * 40, "loaded_config_revision": None},
+    ))
+    result = latency.check_decoder_latency(
+        "Qwen/Qwen3.8-27B", "a" * 40,
+        structured_summary_mode="schema_citations_separate_ids_v1",
+    )
+    assert result["mask_calls"] == operations["masks"] == 583
+    assert result["max_mask_seconds"] == pytest.approx(0.437)
+    assert result["max_gate_mask_seconds"] == pytest.approx(0.090)
+    assert result["accepted_token_calls"] == operations["tokens"]
+    assert result["confirmation_replay_token_calls"] > 0
+
+
+def test_v7_monitor_failure_keeps_completed_summary_profile_and_actual_counts(monkeypatch, latency):
+    xgr, compiler, tokenizer, operations, _ = fake_runtime(
+        monkeypatch, latency, mask_seconds=[0.001] * 301 + [0.437, 0.251],
+    )
+    xgr.GrammarCompiler = lambda info, **kwargs: compiler
+    monkeypatch.setattr(latency, "_load_runtime", lambda *args: (
+        xgr, tokenizer, SimpleNamespace(vocab_size=248320), {"xgrammar": "0.2.3"},
+        {"config_revision_pin": "a" * 40, "loaded_config_revision": None},
+    ))
+    with pytest.raises(latency.DecoderLatencyError) as caught:
+        latency.check_decoder_latency(
+            "Qwen/Qwen3.8-27B", "a" * 40,
+            structured_summary_mode="schema_citations_separate_ids_v1",
+        )
+    receipt = caught.value.receipt
+    assert receipt["mask_calls"] == operations["masks"] == 303
+    assert receipt["accepted_token_calls"] == operations["tokens"]
+    assert receipt["profile"] == "monitor"
+    assert len(receipt["completed_profiles"]) == 1
+    summary = receipt["completed_profiles"][0]
+    assert summary["name"] == "summary" and summary["mask_calls"] == 301
+    assert sum(len(case["mask_seconds"]) for case in summary["positions"]) == 301
+    assert receipt["positions"][0]["mask_seconds"] == pytest.approx([0.437, 0.251])
+
+
+def test_v7_final_deadline_keeps_both_completed_profiles(monkeypatch, latency):
+    xgr, compiler, tokenizer, operations, clock = fake_runtime(monkeypatch, latency)
+    xgr.GrammarCompiler = lambda info, **kwargs: compiler
+    monkeypatch.setattr(latency, "_load_runtime", lambda *args: (
+        xgr, tokenizer, SimpleNamespace(vocab_size=248320), {"xgrammar": "0.2.3"},
+        {"config_revision_pin": "a" * 40, "loaded_config_revision": None},
+    ))
+    original = latency._profile_schema
+
+    def profile(*args, **kwargs):
+        receipt = original(*args, **kwargs)
+        if kwargs["name"] == "monitor":
+            clock[0] = 121
+        return receipt
+
+    monkeypatch.setattr(latency, "_profile_schema", profile)
+    with pytest.raises(latency.DecoderLatencyError) as caught:
+        latency.check_decoder_latency(
+            "Qwen/Qwen3.8-27B", "a" * 40,
+            structured_summary_mode="schema_citations_separate_ids_v1",
+        )
+    receipt = caught.value.receipt
+    assert receipt["reason_code"] == "total_deadline"
+    assert receipt["mask_calls"] == operations["masks"] == 581
+    assert receipt["accepted_token_calls"] == operations["tokens"]
+    assert len(receipt["completed_profiles"]) == 2
 
 
 def test_latency_cli_forwards_v7_mode_to_the_isolated_worker(monkeypatch, latency, capsys):

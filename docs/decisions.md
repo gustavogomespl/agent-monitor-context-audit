@@ -695,6 +695,16 @@ accepted wording and renders only model-selected citations; it does not infer a
 missing reference, rewrite claims or silently discard content. Correct reference
 format does not prove faithful evidence selection.
 
+The unbounded prose grammar rejects standalone event-ID tokens using Unicode
+word/digit boundaries, while permitting ordinary identifiers with similar
+substrings. Claim text must emit non-control Unicode literally; Unicode escapes
+for those characters are rejected both by the decoder and by the local lexical
+check, preventing escape-based ID concealment. Usual JSON quote, slash, backslash
+and control escapes remain available, including Unicode-escaped control
+characters. This serialization requirement does not introduce a text-length
+ceiling or alter accepted decoded wording. Historical modes retain their prior
+lexical behavior.
+
 No per-claim text-length bound is restored. The shared final body ceiling remains
 `B_i = min(T_i, max(1024, min(2048, floor(0.25 * T_i))))`, with identity handling
 at or below 1,024 tokens. Both summary conditions retain the 60–80% target,
@@ -708,11 +718,28 @@ escalate. Full history remains complete. The v6 monitor schema, rubric, continuo
 Before loading model weights, semantic decoder checks and the full-vocabulary
 latency gate exercise the v7 production schema. The guided v7 CLI passes
 `--structured-summary-mode schema_citations_separate_ids_v1`; its receipt must
-report that same mode. Historical v6 retains its existing CLI behavior. The
-0.25-second per-mask threshold, bounded subprocess deadline and no-fallback policy
-remain unchanged. Private receipts record the selected mode, model revision,
-schema hashes and measured timings. These checks use the pinned tokenizer/config
-without model weights and do not establish GPU throughput or monitoring quality.
+report that same mode. Historical v6 retains its existing CLI behavior and
+`single_measurement_v1` policy. During direct CPU diagnosis, one v7 mask took
+437.879 ms of wall time but 145.449 ms of thread CPU time, leaving approximately
+292 ms off CPU. This provides a concrete reason to confirm isolated scheduling
+spikes instead of equating one wall-time sample with sustained grammar cost.
+
+V7 therefore uses `two_fast_confirmations_v1`: when an initial mask exceeds
+0.25 seconds, two fresh matchers and new bitmasks independently reconstruct the
+same accepted-token prefix. Both confirmation measurements must be at or below
+0.25 seconds; either slow confirmation fails setup. All raw timings remain in the receipt, including
+the initial spike. `max_mask_seconds` stays the raw maximum;
+`max_gate_mask_seconds` records the maximum used by the confirmation gate, and
+the notebook displays both explicitly. Setup rejects a missing or different
+policy receipt, a missing/nonfinite/negative/slow confirmed maximum or a gate
+threshold other than 0.25 seconds. Booleans are not accepted as timings.
+The 120-second profile and 150-second worker deadlines and
+no-fallback behavior remain unchanged. This engineering check does not modify
+generated text, score computation, inference retries or historical v6 behavior.
+
+Private receipts record the selected mode and policy, model revision, schema
+hashes and measured timings. These checks use the pinned tokenizer/config without
+model weights and do not establish GPU throughput or monitoring quality.
 
 V7 repeats all 24 pilot evaluations with fresh calls and caches. Its source,
 configuration and numeric results use the summary-v7 namespace. First setup
@@ -722,6 +749,14 @@ rescued or reclassified. Data, opaque IDs, family split, measured context,
 model/tokenizer/runtime pins and the remaining shared 12-hour budget are preserved.
 Earlier freeze or test evidence blocks creating this amendment. Full development
 and reviewed freezing remain required before held-out scoring.
+
+The notebook builder also retains source-file hashes from all commits reachable
+from its build revision. The previous six-commit window had dropped the saved
+source pin even though it remained a valid immutable ancestor, blocking fresh
+version setup. This compatibility correction accepts known committed bytes;
+arbitrary local edits, frozen snapshots and recorded scientific-source drift
+remain protected. A synthetic migration regression covers an older-than-six
+source pin and verifies that unrelated local modifications are still rejected.
 
 Codex implemented the author-requested exploratory amendment with parallel AI
 assistance and independent synthetic checks. Offline checks do not establish

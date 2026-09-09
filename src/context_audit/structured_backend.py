@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import copy
 import hashlib
 import importlib.metadata
@@ -10,6 +11,59 @@ import json
 from context_audit.structured_summary import CLAIM_FIELDS, draft_limits, structured_summary_schema
 
 XGRAMMAR_VERSION = "0.2.3"
+
+
+def _check_separate_ids(xgr, compiler) -> dict:
+    """Falsify inline-citation and escape bypasses using independent complete JSON."""
+    schema = structured_summary_schema(
+        {"E0003", "E0004"}, token_budget=2048, text_bounds=False, citations_in_text=False,
+    )
+    compiled = compiler.compile_json_schema(schema)
+    accepted, rejected = 0, 0
+
+    def draft(text):
+        return {
+            field: [{"text": text, "evidence_event_ids": ["E0003"]}] if index == 0 else []
+            for index, field in enumerate(CLAIM_FIELDS)
+        }
+
+    def check(raw, expected):
+        nonlocal accepted, rejected
+        matcher = xgr.GrammarMatcher(compiled)
+        actual = matcher.accept_string(raw) and matcher.is_completed()
+        if actual != expected:
+            raise ValueError("Separate-ID decoder failed an independent schema check")
+        accepted += int(expected)
+        rejected += int(not expected)
+
+    for text in (
+        'Exact "quote", \\ path, café\n雪 🧪.', "CODE1234", "E0003suffix",
+        "éE0003", "E0003é", "E0003_", "E123", "E²³¹⁴", "A\x00\x1fB",
+        "Independent long observation. " * 60, "Exact \U000312e5 identifier.",
+        "𱋥E0003", "E0003𱋥", "흍E0003", "E0003흍",
+    ):
+        check(json.dumps(draft(text), ensure_ascii=False), True)
+    for text in (
+        "E0003", "Observed [E0003].", "E0003/E0004", "E00003", "E１２３４",
+        "E٣٢١٤", "E0003😀", "E0003\n", "E0003\u0301", "E0003\\path",
+    ):
+        check(json.dumps(draft(text), ensure_ascii=False), False)
+    # Non-control Unicode must be literal in this mode. Neither an escaped E
+    # nor an escaped digit can turn a forbidden reference into permitted prose.
+    for encoded in (r"\u00450003", r"E\u0030003", r"caf\u00e9", r"\ud83e\uddea"):
+        raw = json.dumps(draft("placeholder")).replace(
+            '"placeholder"', '"' + encoded + '"',
+        )
+        check(raw, False)
+    for selected in ([], ["E9999"], ["E0003"] * 3):
+        example = draft("Independent observation.")
+        example[CLAIM_FIELDS[0]][0]["evidence_event_ids"] = selected
+        check(json.dumps(example), False)
+    return {
+        "accepted_cases": accepted, "rejected_cases": rejected,
+        "schema_sha256": hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(),
+        "model_generation_executed": False,
+    }
 
 
 def _check_compact_and_monitor(xgr, compiler) -> dict:
@@ -176,7 +230,7 @@ def _check_bounded_schema(xgr, compiler, token_budget: int) -> dict:
     }
 
 
-def check_structured_backend() -> dict:
+def check_structured_backend(*, include_separate_ids: bool = False) -> dict:
     """Compile the actual schema and test complete strings using independent toy inputs."""
     version = importlib.metadata.version("xgrammar")
     if version != XGRAMMAR_VERSION:
@@ -226,14 +280,22 @@ def check_structured_backend() -> dict:
     if accepts(missing):
         raise ValueError("Citation decoder accepted a missing summary field")
     rejected += 1
-    return {
+    receipt = {
         "status": "passed", "backend": "xgrammar", "version": version,
         "schema_sha256": hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(),
         "accepted_cases": 2, "rejected_cases": rejected, "model_generation_executed": False,
         "bounded_checks": [_check_bounded_schema(xgr, compiler, budget) for budget in (1024, 2048)],
         "compact_and_monitor_checks": _check_compact_and_monitor(xgr, compiler),
     }
+    if include_separate_ids:
+        receipt["separate_ids_checks"] = _check_separate_ids(xgr, compiler)
+    return receipt
 
 
 if __name__ == "__main__":
-    print(json.dumps(check_structured_backend(), sort_keys=True))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--separate-ids", action="store_true")
+    args = parser.parse_args()
+    print(json.dumps(
+        check_structured_backend(include_separate_ids=args.separate_ids), sort_keys=True,
+    ))

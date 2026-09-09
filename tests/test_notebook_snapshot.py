@@ -311,3 +311,52 @@ def test_v7_snapshot_preserves_all_previous_source_receipts_and_results(tmp_path
     assert json.loads(receipt.read_text())["snapshot_sha256"] == expected
     for path, content in old.items():
         assert path.read_bytes() == content
+
+
+def test_builder_preserves_old_pinned_source_compatibility_beyond_six_commits(
+    tmp_path, monkeypatch,
+):
+    """A durable source pin must not expire as new reviewed commits accumulate."""
+    from types import SimpleNamespace
+
+    builder = runpy.run_path(str(SCRIPT.with_name("build_qwen_notebook.py")))
+    source_payload = builder["source_payload"]
+    public, repo, drive = tmp_path / "public", tmp_path / "repo", tmp_path / "drive"
+    names = [
+        "src/context_audit/example.py", "pyproject.toml", "uv.lock",
+        "scripts/colab_bootstrap.py", "scripts/notebook_snapshot.py",
+        "research_plan.md", "docs/decisions.md", "docs/qwen_colab.md",
+    ]
+    for name in names:
+        path = public / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Current synthetic source\n")
+    # Eight independent committed versions; the preserved pin is older than six.
+    revisions = [str(index) * 40 for index in range(8, 0, -1)]
+
+    def run(command, **kwargs):
+        assert kwargs["cwd"] == public
+        if command[:2] == ["git", "log"]:
+            limited = next((part for part in command if part[1:].isdigit()), None)
+            selected = revisions[:int(limited[1:])] if limited else revisions
+            return SimpleNamespace(returncode=0, stdout="\n".join(selected))
+        assert command[:2] == ["git", "show"]
+        revision, name = command[2].split(":", 1)
+        assert revision in revisions and name in names
+        return SimpleNamespace(returncode=0, stdout=f"Synthetic revision {revision}\n".encode())
+
+    monkeypatch.setitem(source_payload.__globals__, "subprocess", SimpleNamespace(run=run))
+    encoded, digest = source_payload(public)
+    old_text = f"Synthetic revision {revisions[-1]}\n"
+    source = repo / "src/context_audit/example.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(old_text)
+    apply(repo, drive / "versions/summary-v7", encoded=encoded, expected=digest,
+          run_root=drive / "runs-private", run_version="summary-v7")
+    assert source.read_text() == "Current synthetic source\n"
+
+    source.write_text("Unrelated local changes must survive\n")
+    with pytest.raises(ValueError, match="Preserving modified local source"):
+        apply(repo, drive / "versions/summary-v7", encoded=encoded, expected=digest,
+              run_root=drive / "runs-private", run_version="summary-v7")
+    assert source.read_text() == "Unrelated local changes must survive\n"

@@ -154,9 +154,10 @@ def source_payload(root):
     ])
     if (root / "requirements-colab.txt").exists():
         paths.append(root / "requirements-colab.txt")
-    # Recognize released source versions; arbitrary local edits remain protected.
+    # Durable code pins can outlive many notebook revisions. Accept every committed
+    # ancestor version, while arbitrary local edits remain protected by file hashes.
     revisions = subprocess.run(
-        ["git", "log", "-6", "--format=%H"], cwd=root,
+        ["git", "log", "--format=%H"], cwd=root,
         check=True, capture_output=True, text=True,
     ).stdout.splitlines()
     files = []

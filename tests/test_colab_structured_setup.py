@@ -33,7 +33,10 @@ def test_probe_runs_before_any_model_load_in_fresh_process(tmp_path, monkeypatch
                'accepted_cases': 2, 'rejected_cases': 41, 'model_generation_executed': False}
 
     def run(command, **kwargs):
-        assert command[-2:] == ['-m', 'context_audit.structured_backend']
+        expected = ['-m', 'context_audit.structured_backend']
+        if version == 'summary-v7':
+            expected.append('--separate-ids')
+        assert command[1:] == expected
         assert kwargs['cwd'] == tmp_path and kwargs['timeout'] <= 120
         assert '--model' not in command
         return SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr='')
@@ -83,7 +86,11 @@ def test_latency_probe_uses_pinned_tokenizer_and_persists_receipt(
     receipt = {"status": "passed", "model_generation_executed": False,
                "vocab_size": 300000, "max_mask_seconds": 0.025}
     if version == "summary-v7":
-        receipt["structured_summary_mode"] = "schema_citations_separate_ids_v1"
+        receipt.update(
+            structured_summary_mode="schema_citations_separate_ids_v1",
+            mask_gate_policy="two_fast_confirmations_v1",
+            max_mask_seconds=0.4, max_gate_mask_seconds=0.025, mask_gate_seconds=0.25,
+        )
 
     def run(command, **kwargs):
         expected = [sys.executable, "-m", "context_audit.decoder_latency",
@@ -99,7 +106,14 @@ def test_latency_probe_uses_pinned_tokenizer_and_persists_receipt(
     assert ns["prepare_decoder_latency"]() == receipt
     saved = ns["DRIVE_ROOT"] / f"versions/{version}/configuration/decoder-latency.json"
     assert json.loads(saved.read_text()) == receipt
-    assert "DECODER_LATENCY_OK" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "DECODER_LATENCY_OK" in output
+    if version == "summary-v7":
+        assert "raw maximum mask seconds: 0.4" in output
+        assert "confirmed gate maximum mask seconds: 0.025" in output
+    else:
+        assert "maximum mask seconds: 0.025" in output
+        assert "confirmed" not in output and "raw maximum" not in output
     assert ns["SETUP_READY"] is False
 
 
@@ -179,7 +193,11 @@ def test_setup_runs_latency_after_decoder_and_before_ready(
     receipt = {"status": "passed", "model_generation_executed": False,
                "vocab_size": 300000, "max_mask_seconds": 0.025}
     if version == "summary-v7":
-        receipt["structured_summary_mode"] = "schema_citations_separate_ids_v1"
+        receipt.update(
+            structured_summary_mode="schema_citations_separate_ids_v1",
+            mask_gate_policy="two_fast_confirmations_v1",
+            max_mask_seconds=0.4, max_gate_mask_seconds=0.025, mask_gate_seconds=0.25,
+        )
 
     def imports():
         phases.append("imports")
@@ -242,4 +260,128 @@ def test_v7_requires_a_latency_receipt_for_its_production_schema(
         ns["prepare_decoder_latency"]()
     path = ns["DRIVE_ROOT"] / "versions/summary-v7/configuration/decoder-latency.json"
     assert not path.exists()
+    assert ns["SETUP_READY"] is False
+
+
+@pytest.mark.parametrize("reported_policy", [None, "single_measurement_v1", "unknown_policy"])
+def test_v7_requires_the_reviewed_mask_confirmation_policy(tmp_path, monkeypatch, reported_policy):
+    ns = bootstrap(tmp_path, "summary-v7")
+    ns["DRIVE_ROOT"] = tmp_path / "drive"
+    pin = ns["DRIVE_ROOT"] / "configuration/model-pin.json"
+    pin.parent.mkdir(parents=True)
+    pin.write_text(json.dumps({"model_id": "Qwen/Qwen3.8-27B", "model_revision": "b" * 40}))
+    receipt = {"status": "passed", "model_generation_executed": False,
+               "structured_summary_mode": "schema_citations_separate_ids_v1",
+               "vocab_size": 300000, "max_mask_seconds": 0.4, "max_gate_mask_seconds": 0.025}
+    if reported_policy is not None:
+        receipt["mask_gate_policy"] = reported_policy
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=json.dumps(receipt), stderr="",
+    ))
+    with pytest.raises(RuntimeError, match="confirmation policy"):
+        ns["prepare_decoder_latency"]()
+    path = ns["DRIVE_ROOT"] / "versions/summary-v7/configuration/decoder-latency.json"
+    assert not path.exists()
+    assert ns["SETUP_READY"] is False
+
+
+@pytest.mark.parametrize("field,value", [
+    ("max_gate_mask_seconds", None),
+    ("max_gate_mask_seconds", True),
+    ("max_gate_mask_seconds", "0.025"),
+    ("max_gate_mask_seconds", float("nan")),
+    ("max_gate_mask_seconds", float("inf")),
+    ("max_gate_mask_seconds", -0.001),
+    ("max_gate_mask_seconds", 0.251),
+    ("mask_gate_seconds", None),
+    ("mask_gate_seconds", True),
+    ("mask_gate_seconds", "0.25"),
+    ("mask_gate_seconds", float("nan")),
+    ("mask_gate_seconds", 0.5),
+])
+def test_v7_rejects_unverified_or_slow_confirmed_mask_receipts(tmp_path, monkeypatch, field, value):
+    ns = bootstrap(tmp_path, "summary-v7")
+    ns["DRIVE_ROOT"] = tmp_path / "drive"
+    pin = ns["DRIVE_ROOT"] / "configuration/model-pin.json"
+    pin.parent.mkdir(parents=True)
+    pin.write_text(json.dumps({"model_id": "Qwen/Qwen3.8-27B", "model_revision": "b" * 40}))
+    receipt = {"status": "passed", "model_generation_executed": False,
+               "structured_summary_mode": "schema_citations_separate_ids_v1",
+               "mask_gate_policy": "two_fast_confirmations_v1",
+               "vocab_size": 300000, "max_mask_seconds": 0.4,
+               "max_gate_mask_seconds": 0.025, "mask_gate_seconds": 0.25}
+    if value is None:
+        receipt.pop(field)
+    else:
+        receipt[field] = value
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=json.dumps(receipt), stderr="",
+    ))
+    with pytest.raises(RuntimeError, match="confirmed mask timing"):
+        ns["prepare_decoder_latency"]()
+    path = ns["DRIVE_ROOT"] / "versions/summary-v7/configuration/decoder-latency.json"
+    assert not path.exists()
+    assert ns["SETUP_READY"] is False
+
+
+@pytest.mark.parametrize("version,returncode", [
+    ("summary-v6", 1), ("summary-v7", 0), ("summary-v7", 1),
+])
+def test_failed_latency_receipts_preserve_all_v7_timings_without_overwriting_success(
+    tmp_path, monkeypatch, version, returncode,
+):
+    ns = bootstrap(tmp_path, version)
+    ns["DRIVE_ROOT"] = tmp_path / "drive"
+    pin = ns["DRIVE_ROOT"] / "configuration/model-pin.json"
+    pin.parent.mkdir(parents=True)
+    pin.write_text(json.dumps({"model_id": "Qwen/Qwen3.8-27B", "model_revision": "b" * 40}))
+    configuration = ns["source_workspace"]() / "configuration"
+    configuration.mkdir(parents=True)
+    success = configuration / "decoder-latency.json"
+    success.write_text('{"status":"passed","synthetic_previous_receipt":true}\n')
+    previous = success.read_bytes()
+    receipt = {"status": "failed", "model_generation_executed": False,
+               "reason_code": "mask_latency", "mask_gate_policy": "two_fast_confirmations_v1",
+               "measurements": [{"position": i, "mask_seconds": i / 10000} for i in range(1000)]}
+    encoded = json.dumps(receipt)
+    assert len(encoded) > 12000
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=returncode, stdout=encoded, stderr="Synthetic optional import warning",
+    ))
+    errors = []
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="before model startup") as raised:
+            ns["prepare_decoder_latency"]()
+        errors.append(str(raised.value))
+        assert ns["SETUP_READY"] is False
+    failures = sorted((configuration / "decoder-latency-failures").glob("*.json"))
+    if version == "summary-v7":
+        assert len(failures) == 2 and failures[0] != failures[1]
+        assert all(json.loads(path.read_text()) == receipt for path in failures)
+        assert all(any(str(path) in error for error in errors) for path in failures)
+        assert all("Full private decoder receipt:" in error for error in errors)
+    else:
+        assert failures == []
+        assert all("Full private decoder receipt:" not in error for error in errors)
+    assert all(len(error) < 13000 for error in errors)
+    assert success.read_bytes() == previous
+
+
+def test_v7_failure_receipt_write_error_is_not_silently_ignored(tmp_path, monkeypatch):
+    ns = bootstrap(tmp_path, "summary-v7")
+    ns["DRIVE_ROOT"] = tmp_path / "drive"
+    pin = ns["DRIVE_ROOT"] / "configuration/model-pin.json"
+    pin.parent.mkdir(parents=True)
+    pin.write_text(json.dumps({"model_id": "Qwen/Qwen3.8-27B", "model_revision": "b" * 40}))
+    failure_directory = ns["source_workspace"]() / "configuration/decoder-latency-failures"
+    failure_directory.parent.mkdir(parents=True)
+    failure_directory.write_text("Synthetic obstruction that must be preserved")
+    receipt = {"status": "failed", "model_generation_executed": False,
+               "reason_code": "mask_latency"}
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=1, stdout=json.dumps(receipt), stderr="",
+    ))
+    with pytest.raises(OSError):
+        ns["prepare_decoder_latency"]()
+    assert failure_directory.read_text() == "Synthetic obstruction that must be preserved"
     assert ns["SETUP_READY"] is False
